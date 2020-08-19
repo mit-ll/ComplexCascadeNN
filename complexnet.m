@@ -48,7 +48,8 @@ classdef complexnet < handle
     % rotation example (as in Nitta)
     % ellipse
     % I
-    rot = pi/2; R = [cos(rot) -sin(rot); sin(rot) cos(rot)];    
+    rot = pi/2; R = [cos(rot) -sin(rot); sin(rot) cos(rot)];  
+    R = diag([0.5 0.3])*R;
     
     ini1 = linspace(-0.5,0.5,15); inr1 = zeros(size(ini1));
     inr2 = linspace(-0.1,0.1,5); ini2 = 0.55*ones(size(inr2));
@@ -65,14 +66,18 @@ classdef complexnet < handle
     y= R * [real(shapeO); imag(shapeO)];
     shapeOrotated = y(1,:) + 1i*y(2,:);
     
-    params.hiddenSize=[6 1]; 
+    params.hiddenSize=[1 6 1]; 
     params.layersFcn='sigrealimag2'; params.outputFcn='sigrealimag2'; 
     net = complexnet(params)    
     [net,outhat] = net.train(shape,shaperotated);
-    
-    [~,~,y,~] = net.test(shapeO); outO = y{end};
-    
+    [~,~,y,~] = net.test(shapeO); outO = y{end};    
     print(net)        
+
+
+    net = feedforwardnet( 2* params.hiddenSize);
+    realifyfn = @(x) [real(x); imag(x)];
+    net = train(net,realifyfn(shape),realifyfn(shaperotated));
+    outOr =net(realifyfn(shapeO)); outOr=outOr(1,:)+1i*outOr(2,:); 
     
     figure(123);clf;
     plot(shape,'.','MarkerSize',12); hold on;
@@ -81,10 +86,11 @@ classdef complexnet < handle
     
     plot(shapeO,'.','MarkerSize',24);
     plot(shapeOrotated,'o','MarkerSize',12);
-    plot(outO,'o','MarkerSize',12);
+    plot(outO,'o','MarkerSize',12);    
+    plot(outOr,'ro','MarkerSize',12);
     
     legend('shape train','shape train rotated','net train output',...
-        'shape test','shape test rotated', 'net test output');
+        'shape test','shape test rotated', 'net test output','real net test output');
     grid minor; grid;
     boldify;
     %----------------------------------------------------------------------
@@ -449,8 +455,18 @@ classdef complexnet < handle
                     
                     DeltaW{nn} = zeros( obj.nbrofUnits(2,nn), obj.nbrofUnits(1,nn) );
                     for mm=1:nbrofSamplesinBatch
-                        onesvec = ones(obj.nbrofUnits(2,nn),1);
-                        dW = diag(deltax{nn}(:,mm)) * ( onesvec* ynnminus1(:,mm)' );                                                
+                        onesvec = ones(obj.nbrofUnits(2,nn),1);                        
+                        %{
+                        % causes unwanted non-linear distortion
+                        if splitrealimag
+                            dxr = real(deltax{nn}(:,mm));
+                            dxi = imag(deltax{nn}(:,mm));
+                            dW = diag(dxr) * ( onesvec* real(ynnminus1(:,mm).') ) + ...
+                                diag(dxi) * ( onesvec* imag(ynnminus1(:,mm).') );                        
+                        end
+                        %}                        
+                        dW = diag(deltax{nn}(:,mm)) * ( onesvec* ynnminus1(:,mm)' );
+                        
                         if any(size(dW)~=size(DeltaW{nn}))
                             dW
                             DeltaW{nn}
