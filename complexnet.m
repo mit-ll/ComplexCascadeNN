@@ -44,21 +44,50 @@ classdef complexnet < handle
     x=randn(1,200)+1i*randn(1,200); net = net.train(x,(3+3*i)* (x./abs(x)) );
     print(net)            
     
+    %----------------------------------------------------------------------
     % rotation example (as in Nitta)
-    A = 0.6; B = 0.3; th = linspace(0,2*pi,22);
-    in = A*cos(th) + 1i*B*sin(th);
-    rot = pi/3; R = [cos(rot) -sin(rot); sin(rot) cos(rot)];    
-    y= R * [real(in); imag(in)];
-    out = y(1,:) + 1i*y(2,:);
+    % ellipse
+    % I
+    rot = pi/2; R = [cos(rot) -sin(rot); sin(rot) cos(rot)];    
     
-    params.hiddenSize=[6 1]; params.layersFcn='sigrealimag2'; params.outputFcn='sigrealimag2'; net = complexnet(params)    
-    [net,outhat] = net.train(in,out);
+    ini1 = linspace(-0.5,0.5,15); inr1 = zeros(size(ini1));
+    inr2 = linspace(-0.1,0.1,5); ini2 = 0.55*ones(size(inr2));
+    inr3 = inr2; ini3=-ini2;    
+    shapeI=[inr1 inr2 inr3] + 1i*[ini1 ini2 ini3];
+        
+    A = 0.6; B = 0.3; th = linspace(0,2*pi,220);
+    shapeO = A*cos(th) + 1i*B*sin(th);
+
+    shape = shapeI;    
+    y= R * [real(shape); imag(shape)];
+    shaperotated = y(1,:) + 1i*y(2,:);
+    
+    y= R * [real(shapeO); imag(shapeO)];
+    shapeOrotated = y(1,:) + 1i*y(2,:);
+    
+    params.hiddenSize=[6 1]; 
+    params.layersFcn='sigrealimag2'; params.outputFcn='sigrealimag2'; 
+    net = complexnet(params)    
+    [net,outhat] = net.train(shape,shaperotated);
+    
+    [~,~,y,~] = net.test(shapeO); outO = y{end};
+    
     print(net)        
     
     figure(123);clf;
-    plot(in,'.','MarkerSize',12); hold on;
-    plot(out,'v','MarkerSize',12);
+    plot(shape,'.','MarkerSize',12); hold on;
+    plot(shaperotated,'v','MarkerSize',12);
     plot(outhat,'s','MarkerSize',12);
+    
+    plot(shapeO,'.','MarkerSize',24);
+    plot(shapeOrotated,'o','MarkerSize',12);
+    plot(outO,'o','MarkerSize',12);
+    
+    legend('shape train','shape train rotated','net train output',...
+        'shape test','shape test rotated', 'net test output');
+    grid minor; grid;
+    boldify;
+    %----------------------------------------------------------------------
     %}
     
     properties
