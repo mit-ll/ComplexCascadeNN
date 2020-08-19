@@ -21,6 +21,14 @@ classdef complexnet < handle
     net.train(x,(3+3*i)* x./abs(x));  % does not work - can't handle scalar
     print(net);
     
+    % sigmoid
+    params.hiddenSize=[]; params.outputFcn='sigrealimag'; net = complexnet(params)
+    x=randn(1,10000)+1i*randn(1,10000); 
+    y = net.sigrealimag(x);
+    [W,out] = net.trainsingle(x,y);    
+    plot(real(y),real(out),'.'); hold on;
+    plot(imag(y),imag(out),'o');
+    
     %----------------------------------------------------------------------    
     % check for multiple real layers
     params.hiddenSize=[1 2 2]; params.outputFcn='purelin'; net = complexnet(params)
@@ -34,8 +42,23 @@ classdef complexnet < handle
     
     params.hiddenSize=[1]; params.layersFcn='purephase'; params.outputFcn='purelin'; net = complexnet(params)    
     x=randn(1,200)+1i*randn(1,200); net = net.train(x,(3+3*i)* (x./abs(x)) );
+    print(net)            
+    
+    % rotation example (as in Nitta)
+    A = 0.6; B = 0.3; th = linspace(0,2*pi,22);
+    in = A*cos(th) + 1i*B*sin(th);
+    rot = pi/3; R = [cos(rot) -sin(rot); sin(rot) cos(rot)];    
+    y= R * [real(in); imag(in)];
+    out = y(1,:) + 1i*y(2,:);
+    
+    params.hiddenSize=[6 1]; params.layersFcn='sigrealimag2'; params.outputFcn='sigrealimag2'; net = complexnet(params)    
+    [net,outhat] = net.train(in,out);
     print(net)        
     
+    figure(123);clf;
+    plot(in,'.','MarkerSize',12); hold on;
+    plot(out,'v','MarkerSize',12);
+    plot(outhat,'s','MarkerSize',12);
     %}
     
     properties
@@ -52,8 +75,8 @@ classdef complexnet < handle
     end
     
     properties (Constant)
-        nbrOfEpochs = 1e3; % number of iterations picking a batch each time and running gradient
-        printmseinEpochs = 50;  % one print per printmeseinEpochs
+        nbrOfEpochs = 1e4; % number of iterations picking a batch each time and running gradient
+        printmseinEpochs = 1%50;  % one print per printmeseinEpochs
         beta1=0.9;         % Beta1 is the decay rate for the first moment
         beta2=0.999;       % Beta 2 is the decay rate for the second moment
         learningRate = 1e-2; % step size for the gradient        
@@ -93,8 +116,9 @@ classdef complexnet < handle
             z = zr + 1i * zi;
             
             % assume that derivative is 1 when either is linear
-            dz = zeros(size(z));
-            dz(~indsr || ~indsi) = 1;
+            [dz.real,dz.imag] = deal(zeros(size(z)));
+            dz.real(~indsr) = 1;
+            dz.imag(~indsi) = 1;                        
         end
 
         % complex ReLU
@@ -108,8 +132,9 @@ classdef complexnet < handle
             z = zr + 1i * zi;
             
             % assume that derivative is 1 when either is linear
-            dz = zeros(size(z));
-            dz(~indsr || ~indsi) = 1;
+            [dz.real,dz.imag] = deal(zeros(size(z)));
+            dz.real(~indsr) = 1;
+            dz.imag(~indsi) = 1;                        
         end        
         
         % single sided sigmoidal
@@ -119,7 +144,8 @@ classdef complexnet < handle
             z =  zr + 1i*zi;
             % derivative is exp(-x)./(1+ exp(-x)).^2
             % which can be written as z.*(1-z);
-            dz =  zr.*(1-zr) + 1i*zi.*(1-zi);
+            dz.real = zr.*(1-zr);
+            dz.imag = zi.*(1-zi);
         end
         
         % two sided sigmoidal
@@ -127,7 +153,8 @@ classdef complexnet < handle
             zr = ( 1./(1+exp(-real(x))) );
             zi = ( 1./(1+exp(-imag(x))) );
             z = (2*zr -1) + 1i*(2*zi -1);
-            dz = 2*zr.*(1-zr) + 1i*2*zi.*(1-zi);
+            dz.real = 2*zr.*(1-zr);
+            dz.imag = 2*zi.*(1-zi);
         end        
     end
     methods        
@@ -166,10 +193,13 @@ classdef complexnet < handle
         %----------------------------------------------------------        
         % single layer complex net
         % train on a single layer to verify derived expressions
-        function Weights = trainsingle(obj,in,out)
+        function [Weights,outhat] = trainsingle(obj,in,out)
             % trainsingle train a single layer network
             transferFcn = obj.layers{end}.transferFcn;
             fn = @(x) obj.(transferFcn)(x);
+            
+            [~,dz] = fn(1);
+            if isstruct(dz), splitrealimag = 1; else, splitrealimag=0; end
                         
             [nbrofInUnits, nbrofSamples] = size(in);
                                     
@@ -186,17 +216,25 @@ classdef complexnet < handle
                 t = out(:,batch);           % desired y{nbrofLayers}                
                 netval = transpose(w)*y + b;
                 [curr,termi] = fn( netval );
-                err = (t - curr).*conj(termi);
+                
+                if splitrealimag
+                    err = real(t - curr).*termi.real + 1i* imag(t - curr).*termi.imag;
+                else
+                    err = (t - curr).*conj(termi);
+                end
                 dw =  transpose( err*y' )/nbrofSamplesinBatch;
                 w = w + obj.learningRate * dw;
                 d =  mean(  err );
                 b = b + d;                                   
-                mse(epoch) = err*err'/nbrofSamplesinBatch;
+                
+                mse(epoch) = (t-curr)*(t-curr)'/nbrofSamplesinBatch;
+                
                 if (epoch/obj.printmseinEpochs == floor(epoch/obj.printmseinEpochs))
-                    fprintf('%s mse(%d) %0.3f\n',transferFcn,epoch,mse(epoch));
+                    fprintf('%s mse(%d) %0.3f \n',transferFcn,epoch,mse(epoch));
                 end
             end
             Weights = [w; b];
+            outhat = fn( transpose(w)*in + b);
         end
         
         %----------------------------------------------------------
@@ -245,7 +283,7 @@ classdef complexnet < handle
         end
 
         %------------------------------------------------------------------        
-        % show the network
+        % show the network when trained using train (not trainsingle)
         function print(obj)            
             for nn=1:obj.nbrofLayers
                 fprintf('-----------------------------\n');
@@ -334,10 +372,17 @@ classdef complexnet < handle
                     % deltax = d{cost}/d{xn} called "sensitivity"                                
                     deltax{nn} = zeros( obj.nbrofUnits(2,nn), nbrofSamplesinBatch);
                     
+                    if isstruct(yprime{nn}), splitrealimag = 1; else, splitrealimag=0; end
+                    
                     if nn==obj.nbrofLayers
                         % for output layer, using mean-squared error
                         % w = w - mu (y-d) f'(net*) x*                        
-                        deltax{nn} = (y{nn} - t) .* conj( yprime{nn} );
+                        if splitrealimag
+                            deltax{nn} = real(y{nn} - t) .* yprime{nn}.real + ...
+                                1i*imag(y{nn} - t) .* yprime{nn}.imag;
+                        else
+                            deltax{nn} = (y{nn} - t) .* conj( yprime{nn} );
+                        end                        
                     else
                         for mm=1:nbrofSamplesinBatch 
                             % last column of weight has no effect of dc/x{nn}
@@ -345,7 +390,18 @@ classdef complexnet < handle
                             % hidden layers
                             % w_ij = w_ij + mu [sum_k( (d_k-y_k) f'(net_k*) w_ki* )]
                             %                           *  f'(net_i*) x_j*
-                            dx = transpose(  (obj.Weights{nn+1}(:,1:end-1)) *diag(conj(yprime{nn}(:,mm)))) * deltax{nn+1}(:,mm);
+                            
+                            if splitrealimag
+                                ypr = yprime{nn}.real(:,mm);
+                                ypi = yprime{nn}.imag(:,mm);
+                                dxr_nnplus1 = real(deltax{nn+1}(:,mm));
+                                dxi_nnplus1 = imag(deltax{nn+1}(:,mm));
+                                dx = transpose(  (obj.Weights{nn+1}(:,1:end-1)) *diag(ypr) ) * dxr_nnplus1 + ...
+                                    1i* transpose(  (obj.Weights{nn+1}(:,1:end-1)) *diag(ypi) ) * dxi_nnplus1;                                
+                            else                                
+                                dx = transpose(  (obj.Weights{nn+1}(:,1:end-1)) *diag(conj(yprime{nn}(:,mm)))) * deltax{nn+1}(:,mm);
+                            end
+                            
                             if any(size(dx)~=size(deltax{nn}(:,mm)))
                                 dx
                                 deltax{nn}(:,mm)
