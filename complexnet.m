@@ -69,7 +69,8 @@ classdef complexnet < handle
     params.hiddenSize=[1 6 1]; 
     params.layersFcn='sigrealimag2'; params.outputFcn='sigrealimag2'; 
     net = complexnet(params)    
-    [net,outhat] = net.train(shape,shaperotated);
+    net = net.train(shape,shaperotated);
+    [~,~,y,~] = net.test(shape); outhat = y{end};
     [~,~,y,~] = net.test(shapeO); outO = y{end};    
     print(net)        
 
@@ -111,10 +112,10 @@ classdef complexnet < handle
     
     properties (Constant)
         nbrOfEpochs = 1e4; % number of iterations picking a batch each time and running gradient
-        printmseinEpochs = 1%50;  % one print per printmeseinEpochs
+        printmseinEpochs = 5; %50;  % one print per printmeseinEpochs
         beta1=0.9;         % Beta1 is the decay rate for the first moment
         beta2=0.999;       % Beta 2 is the decay rate for the second moment
-        learningRate = 1e-2; % step size for the gradient        
+        learningRate = 1e-3; % step size for the gradient        
         load = 1e-8;       % loading in denominator of DeltaW for stability
         batchsize_per_feature = 8;    % number of samples per feature to use at a time in a epoch
     end
@@ -239,7 +240,7 @@ classdef complexnet < handle
             [nbrofInUnits, nbrofSamples] = size(in);
                                     
             % pick batch size number of sample if possible
-            nbrofSamplesinBatch =  max(obj.batchsize_per_feature*nbrofInUnits,nbrofSamples);
+            nbrofSamplesinBatch =  min(obj.batchsize_per_feature*nbrofInUnits,nbrofSamples);
                         
             w = obj.crandn(nbrofInUnits,1);
             b = obj.crandn(1,1);
@@ -338,7 +339,7 @@ classdef complexnet < handle
         end
         
         %------------------------------------------------------------------
-        function [obj,outhat] = train(obj,in,out)
+        function obj = train(obj,in,out)
             % in  is features x number of training samples
             % out is desired output x number of training samples            
 
@@ -354,7 +355,7 @@ classdef complexnet < handle
             nbrOfNeuronsInEachHiddenLayer = obj.hiddenSize;
             
             % pick batch size number of sample if possible
-            nbrofSamplesinBatch =  max(obj.batchsize_per_feature*nbrofInUnits,nbrofSamples);
+            nbrofSamplesinBatch =  min(obj.batchsize_per_feature*nbrofInUnits,nbrofSamples);
             
             % allocate space for gradients
             % deltax{n} = dcost/dx{n} vector of dimension x{n}
@@ -455,16 +456,7 @@ classdef complexnet < handle
                     
                     DeltaW{nn} = zeros( obj.nbrofUnits(2,nn), obj.nbrofUnits(1,nn) );
                     for mm=1:nbrofSamplesinBatch
-                        onesvec = ones(obj.nbrofUnits(2,nn),1);                        
-                        %{
-                        % causes unwanted non-linear distortion
-                        if splitrealimag
-                            dxr = real(deltax{nn}(:,mm));
-                            dxi = imag(deltax{nn}(:,mm));
-                            dW = diag(dxr) * ( onesvec* real(ynnminus1(:,mm).') ) + ...
-                                diag(dxi) * ( onesvec* imag(ynnminus1(:,mm).') );                        
-                        end
-                        %}                        
+                        onesvec = ones(obj.nbrofUnits(2,nn),1);                                            
                         dW = diag(deltax{nn}(:,mm)) * ( onesvec* ynnminus1(:,mm)' );
                         
                         if any(size(dW)~=size(DeltaW{nn}))
