@@ -67,13 +67,12 @@ classdef complexnet < handle
     shapeOrotated = y(1,:) + 1i*y(2,:);
     
     params.hiddenSize=[1 6 1]; 
-    params.layersFcn='sigrealimag2'; params.outputFcn='sigrealimag2'; 
+    params.layersFcn='sigrealimag2'; params.outputFcn='purelin'; 
     net = complexnet(params)    
     net = net.train(shape,shaperotated);
     [~,~,y,~] = net.test(shape); outhat = y{end};
     [~,~,y,~] = net.test(shapeO); outO = y{end};    
     print(net)        
-
 
     net = feedforwardnet( 2* params.hiddenSize);
     realifyfn = @(x) [real(x); imag(x)];
@@ -111,14 +110,19 @@ classdef complexnet < handle
     end
     
     properties (Constant)
-        nbrOfEpochs = 1e4; % number of iterations picking a batch each time and running gradient
+        nbrOfEpochs = 2e3; % number of iterations picking a batch each time and running gradient
         printmseinEpochs = 5; %50;  % one print per printmeseinEpochs
         beta1=0.9;         % Beta1 is the decay rate for the first moment
         beta2=0.999;       % Beta 2 is the decay rate for the second moment
-        learningRate = 1e-3; % step size for the gradient        
+        initial_lrate = 1e-2; % initial step size for the gradient        
         load = 1e-8;       % loading in denominator of DeltaW for stability
-        batchsize_per_feature = 8;    % number of samples per feature to use at a time in a epoch
-    end
+        
+        batchsize_per_feature = 12;    % number of samples per feature to use at a time in a epoch
+        minbatchsize = 25;
+        
+        epochs_drop = 1000;   % number of epochs before dropping learning rate
+        drop = 0.5;           % drop in learning rate new = old*drop
+    end        
         
     methods (Static)        
         % complex rand for intializing weights
@@ -240,7 +244,8 @@ classdef complexnet < handle
             [nbrofInUnits, nbrofSamples] = size(in);
                                     
             % pick batch size number of sample if possible
-            nbrofSamplesinBatch =  min(obj.batchsize_per_feature*nbrofInUnits,nbrofSamples);
+            nbrofSamplesinBatch =  max(obj.batchsize_per_feature*nbrofInUnits,obj.minbatchsize);
+            nbrofSamplesinBatch =  min(nbrofSamplesinBatch,nbrofSamples);
                         
             w = obj.crandn(nbrofInUnits,1);
             b = obj.crandn(1,1);
@@ -353,10 +358,11 @@ classdef complexnet < handle
                 error('input and output number of samples must be identical\n');
             end            
             nbrOfNeuronsInEachHiddenLayer = obj.hiddenSize;
-            
+             
             % pick batch size number of sample if possible
-            nbrofSamplesinBatch =  min(obj.batchsize_per_feature*nbrofInUnits,nbrofSamples);
-            
+            nbrofSamplesinBatch =  max(obj.batchsize_per_feature*nbrofInUnits,obj.minbatchsize);
+            nbrofSamplesinBatch =  min(nbrofSamplesinBatch,nbrofSamples);
+      
             % allocate space for gradients
             % deltax{n} = dcost/dx{n} vector of dimension x{n}
             % DeltaW{n} = dcost/dWeights{n} matrix of dimension W{n}
@@ -385,7 +391,10 @@ classdef complexnet < handle
             % update the weights over the epochs
             mse = -1*ones(1,obj.nbrOfEpochs);
             for epoch = 1:obj.nbrOfEpochs
-                
+
+                % step in learning rate over epochs
+                lrate = obj.initial_lrate * obj.drop^floor((epoch)/obj.epochs_drop);
+
                 % pick a batch for this epoch
                 batch = randperm(nbrofSamples,nbrofSamplesinBatch);
                 
@@ -398,7 +407,7 @@ classdef complexnet < handle
                 mse(epoch)=0.5*mean( abs(y{obj.nbrofLayers}(:)-t(:)).^2 );
                 
                 if (epoch/obj.printmseinEpochs == floor(epoch/obj.printmseinEpochs))
-                    fprintf('mse(%d) %0.3f\n',epoch,mse(epoch));
+                    fprintf('mse(%d) %0.3f lrate %f\n',epoch,mse(epoch),lrate);
                 end
                 
                 %----------------------------------------------------------
@@ -432,8 +441,8 @@ classdef complexnet < handle
                                 ypi = yprime{nn}.imag(:,mm);
                                 dxr_nnplus1 = real(deltax{nn+1}(:,mm));
                                 dxi_nnplus1 = imag(deltax{nn+1}(:,mm));
-                                dx = transpose(  (obj.Weights{nn+1}(:,1:end-1)) *diag(ypr) ) * dxr_nnplus1 + ...
-                                    1i* transpose(  (obj.Weights{nn+1}(:,1:end-1)) *diag(ypi) ) * dxi_nnplus1;                                
+                                dx = transpose(  real(obj.Weights{nn+1}(:,1:end-1)) *diag(ypr) ) * dxr_nnplus1 + ...
+                                    1i* transpose(  imag(obj.Weights{nn+1}(:,1:end-1)) *diag(ypi) ) * dxi_nnplus1;                                
                             else                                
                                 dx = transpose(  (obj.Weights{nn+1}(:,1:end-1)) *diag(conj(yprime{nn}(:,mm)))) * deltax{nn+1}(:,mm);
                             end
@@ -481,7 +490,7 @@ classdef complexnet < handle
                 % sum of gradient (aka momentum), commonly set at 0.9. 
                 % Beta 2 is the decay rate for the second moment, 
                 % sum of gradient squared, and it is commonly set at 0.999.
-                
+                                                
                 for nn=1:obj.nbrofLayers
                     obj.SumDeltaWeights{nn} = obj.SumDeltaWeights{nn} *obj.beta1 + DeltaW{nn} * (1-obj.beta1);
                     
@@ -492,12 +501,11 @@ classdef complexnet < handle
                     % vanilla gradient
                     %obj.Weights{nn} = obj.Weights{nn} - obj.learningRate * DeltaW{nn};
                     
-                    % Adam
+                    % Adam                    
                     obj.Weights{nn} = obj.Weights{nn} - ...
-                        obj.learningRate * obj.SumDeltaWeights{nn} ./ sqrt(obj.SumDeltaWeights2{nn} + obj.load);                    
+                        lrate * obj.SumDeltaWeights{nn} ./ sqrt(obj.SumDeltaWeights2{nn} + obj.load);                    
                 end                                   
             end
-            outhat = y{obj.nbrofLayers};
         end
         
         
