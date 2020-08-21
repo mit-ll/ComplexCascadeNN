@@ -51,8 +51,8 @@ classdef complexnet < handle
     rot = pi/2; R = [cos(rot) -sin(rot); sin(rot) cos(rot)];  
     R = diag([0.5 0.3])*R;
     
-    ini1 = linspace(-0.5,0.5,15); inr1 = zeros(size(ini1));
-    inr2 = linspace(-0.1,0.1,5); ini2 = 0.55*ones(size(inr2));
+    ini1 = linspace(-0.9,0.9,7); inr1 = zeros(size(ini1));
+    inr2 = linspace(-0.2,0.2,2); ini2 = 0.95*ones(size(inr2));
     inr3 = inr2; ini3=-ini2;    
     shapeI=[inr1 inr2 inr3] + 1i*[ini1 ini2 ini3];
         
@@ -66,7 +66,7 @@ classdef complexnet < handle
     y= R * [real(shapeO); imag(shapeO)];
     shapeOrotated = y(1,:) + 1i*y(2,:);
     
-    params.hiddenSize=[1 6 1]; 
+    params.hiddenSize=[1 2 1]; 
     params.layersFcn='sigrealimag2'; params.outputFcn='purelin'; 
     net = complexnet(params)    
     net = net.train(shape,shaperotated);
@@ -437,13 +437,23 @@ classdef complexnet < handle
                             %                           *  f'(net_i*) x_j*
                             
                             if splitrealimag
+                                % for 2-layer derivation, see for example
+                                % "Extension of the BackPropagation
+                                % algorithm to complex numbers" 
+                                % by Tohru Nitta                                
                                 ypr = yprime{nn}.real(:,mm);
                                 ypi = yprime{nn}.imag(:,mm);
                                 dxr_nnplus1 = real(deltax{nn+1}(:,mm));
-                                dxi_nnplus1 = imag(deltax{nn+1}(:,mm));
-                                dx = transpose(  real(obj.Weights{nn+1}(:,1:end-1)) *diag(ypr) ) * dxr_nnplus1 + ...
-                                    1i* transpose(  imag(obj.Weights{nn+1}(:,1:end-1)) *diag(ypi) ) * dxi_nnplus1;                                
-                            else                                
+                                dxi_nnplus1 = imag(deltax{nn+1}(:,mm));                                
+                                dx = (transpose(  real(obj.Weights{nn+1}(:,1:end-1)) *diag(ypr) ) * dxr_nnplus1 + ...
+                                    transpose(  imag(obj.Weights{nn+1}(:,1:end-1)) *diag(ypr) ) * dxi_nnplus1 ) + ...
+                                    ...
+                                    -1i* (  transpose(  imag(obj.Weights{nn+1}(:,1:end-1)) *diag(ypi) ) * dxr_nnplus1 - ...
+                                    transpose(  real(obj.Weights{nn+1}(:,1:end-1)) *diag(ypi) ) * dxi_nnplus1  );                                    
+                            else
+                                % last column of Weights are from the bias
+                                % term for nn+1 layer, which does not
+                                % contribute to nn layer, hence 1:end-1                                
                                 dx = transpose(  (obj.Weights{nn+1}(:,1:end-1)) *diag(conj(yprime{nn}(:,mm)))) * deltax{nn+1}(:,mm);
                             end
                             
@@ -466,8 +476,7 @@ classdef complexnet < handle
                     DeltaW{nn} = zeros( obj.nbrofUnits(2,nn), obj.nbrofUnits(1,nn) );
                     for mm=1:nbrofSamplesinBatch
                         onesvec = ones(obj.nbrofUnits(2,nn),1);                                            
-                        dW = diag(deltax{nn}(:,mm)) * ( onesvec* ynnminus1(:,mm)' );
-                        
+                        dW = diag(deltax{nn}(:,mm)) * ( onesvec* conj(transpose(ynnminus1(:,mm))) );                        
                         if any(size(dW)~=size(DeltaW{nn}))
                             dW
                             DeltaW{nn}
