@@ -4,17 +4,19 @@ addpath ./gradient-descent/
 
 
 
-% check for single complex layer
+%% check for single complex layer
+
 params.hiddenSize=[]; params.outputFcn='purelin';
 params.trainFcn='trainlm';%'Adam2','Vanilla';
 params.initFcn='c-nguyen-widrow';
 params.domap = 0;
-cnet = complexnet(params)
+cnet = complexnet(params);
 x=randn(1,100)+1i*randn(1,100);
 %cnet.trainsingle(x,x*(3+5*1i) + (4-2*1i));
 cnet = cnet.train(x,x*(3+5*1i) + (4-2*1i));
+print(cnet)
 
-%%
+%% check for single hidden real layer
 
 params=[];
 params.hiddenSize=[1];
@@ -22,25 +24,30 @@ params.layersFcn='purelin';
 params.outputFcn='purelin';
 params.trainFcn='RAdam';
 params.initFcn='nguyen-widrow';
-cnet = complexnet(params)
+cnet = complexnet(params);
 x=randn(1,100);
 %cnet.trainsingle(x,3*x+2);
-cnet = cnet.train(x,3*x + 2)
+cnet = cnet.train(x,3*x + 2);
 print(cnet);
 aaa=cnet.test(x);
 figure(1);plot(aaa,3*x+2);
+xlabel('input'); ylabel('output');
 %net = feedforwardnet(params.hiddenSize);
 %net = train(net,x,3*x + 2)
 
 
-%% phase
-params.hiddenSize=[]; params.outputFcn='purephase'; net = complexnet(params)
+%% check for pure phase output function
+
+params.hiddenSize=[]; 
+params.outputFcn='purephase'; 
+net = complexnet(params);
 x=randn(1,100)+1i*randn(1,100);
 net.trainsingle(x,x./abs(x));
-net.train(x,(3+3*i)* x./abs(x));  % does not work - can't handle scalar
+net.train(x,(3+3*1i)* x./abs(x));  % does not work - can't handle scalar
 print(net);
 
-%% sigmoid
+%% check for split real/imaginary tansig(i.e. sigmoid) activation
+
 params.hiddenSize=[]; params.outputFcn='sigrealimag'; net = complexnet(params)
 x=randn(1,10000)+1i*randn(1,10000);
 y = net.sigrealimag(x);
@@ -64,20 +71,45 @@ w
 net.Weights{2}
 b
 
-%% check for multiple real layers
+%% check for multiple layers
 
-params.hiddenSize=[1 2 2]; params.outputFcn='purelin'; net = complexnet(params)
-x=randn(1,200); net = net.train(x,[x; 3*x.^2 + 2*ones(size(x)); 10*x]);
-print(net)
+% multiple real layers
+params.hiddenSize=[1 2 2]; 
+params.outputFcn='purelin'; 
+params.trainFcn = 'Adadelta';%'trainlm';
+params.layersFcn = 'sigrealimag2';
+params.nbrofEpochs=1e4;
+cnet = complexnet(params);
+in = randn(1,200); 
+out = [in; 3*in.^2 + 2*ones(size(in)); 10*in];
+cnet = cnet.train(in,out);
+outhat = cnet.test(in);
+figure(101);clf;
+plot(outhat.','.-'); hold on;   % can't get in^2 easily - use trainlm
+plot(out.');
 
 % check for multiple complex layers
-params.hiddenSize=[1 2 2]; params.outputFcn='purelin'; net = complexnet(params)
-x=randn(1,200)+1i*randn(1,200); net = net.train(x,x*(3+5*1i) + (4-2*1i))
-print(net)
+params.hiddenSize=[1 2 2]; 
+params.outputFcn='purelin';
+params.trainFcn = 'Adadelta';%'trainlm';
+params.layersFcn = 'sigrealimag2';
+params.nbrofEpochs=1e4;
+cnet = complexnet(params);
+in=randn(1,200)+1i*randn(1,200); 
+cnet = cnet.train(in,in*(3+5*1i) + (4-2*1i));
+print(cnet)
 
-params.hiddenSize=[1]; params.layersFcn='purephase'; params.outputFcn='purelin'; net = complexnet(params)
-x=randn(1,200)+1i*randn(1,200); net = net.train(x,(3+3*i)* (x./abs(x)) );
-print(net)
+% purephase multiple layers
+params.hiddenSize=[1]; 
+params.layersFcn='purephase'; 
+params.outputFcn='purelin'; 
+params.hiddenSize=[1 2 2]; 
+params.trainFcn = 'Adadelta';%'trainlm';
+params.nbrofEpochs=1e4;
+cnet = complexnet(params);
+in=randn(1,200)+1i*randn(1,200); 
+cnet = cnet.train(in,(3+3*1i)* (in./abs(in)) );
+print(cnet)
 
 %% rotation example (as in Nitta)
 
@@ -106,11 +138,12 @@ params.nbrofEpochs=1e4;
 params.hiddenSize=[1 2 1];
 params.domap=0;
 params.layersFcn='sigrealimag2'; params.outputFcn='purelin';
+% this example prefers crandn to nguyen-widrow, why?
 params.initFcn='crandn';'c-nguyen-widrow';
 params.minbatchsize=inf; params.batchtype = 'fixed';
-params.trainFcn = 'trainlm';'Adadelta';
+params.trainFcn = 'trainlm';
 
-cnet = complexnet(params)
+cnet = complexnet(params);
 cnet = cnet.train(shape,shaperotated);
 outhat = cnet.test(shape);
 outO = cnet.test(shapeO);
@@ -144,7 +177,7 @@ L = length(at);
 %beta = [ 0.3 + 0.7*1i, 0.7 - 0.3*1i]; lags = { [1,2] , [1,3] };
 beta = [ 0.3 + 0*0.7*1i]; lags = { [1,2] };
 numlags = max(max(lags{:}))+1; att = zeros(numlags,L);
-for ll=0:numlags-1;
+for ll=0:numlags-1
     att(ll+1, ll + (1:L-ll) ) = at(1:L-ll);
 end
 
@@ -157,9 +190,10 @@ for term = 1:length(beta)
         real(beta(term)),imag(beta(term)),lags{term}(1),lags{term}(2));
 end
 
+% setup the samples available for prediction (up to numlags delays)
 L = length(nt);
 numlags = 6+1; ntt = zeros(numlags,L);
-for ll=0:numlags-1;
+for ll=0:numlags-1
     ntt(ll+1, ll + (1:L-ll) ) = nt(1:L-ll);
 end
 
@@ -181,26 +215,21 @@ net = complexnet(params);
 net = net.train(nttpast,out);
 outlinear1 = net.test(nttpast1);
 
-% neural networks parameters
+% non-linear predictor
 params=[];
 params.lrate=1e-1;
 params.domap = 1;
 params.hiddenSize = [16 6 ];
-%params.hiddenSize = [16 6 ];
 params.debugPlots=0;
 params.mu = 1e-3;
 params.trainFcn = 'trainlm'; params.minbatchsize = round(numel(traininds)*0.7);
-%params.trainFcn = 'Adadelta'; params.minbatchsize = round(numel(traininds)*0.7);
 params.initFcn = 'nguyen-widrow';
-%params.initFcn = 'randn';
 params.batchtype='fixed';
-params.layersFcn = 'mytansig';'mytanh';'sigrealimag2';%'sigrealimag2';%'myasinh'
+params.layersFcn = 'mytansig'; %'mytanh';'sigrealimag2';
 params.outputFcn = 'purelin';
 params.nbrofEpochs = 300;
-
 params.mu_inc = 10;
 params.mu_dec = 1/10;
-
 
 txtml = sprintf(' complex ML activation:%s layers:[%s]',params.layersFcn,num2str(params.hiddenSize));
 cnet = complexnet(params);
@@ -208,34 +237,19 @@ cnet = cnet.train(nttpast,out);
 outhat = cnet.test(nttpast);
 outhat1 = cnet.test(nttpast1);
 
+% matlab predictor
 net = feedforwardnet(params.hiddenSize);
 net = train(net,nttpast,out);
 outri = net(nttpast);
-figure(99); clf;
+
+% on the training data
+figure(1233); clf;
 plot(out-at(traininds),'g.-'); hold on;
 plot(outhat,'r.-');
 plot(outri,'k.-')
 xlim([1 100]);
 
-%{
-    %xoffset = net.Inputs{1}.processSettings{1}.xoffset;
-    %gain = net.Inputs{1}.processSettings{1}.gain;
-    %ymin = net.Inputs{1}.processSettings{1}.ymin;
-    %inputs = bsxfun(@plus,bsxfun(@times,bsxfun(@minus,input,xoffset),gain),ymin);
-
-    %And for apply reverse mapminmax to outputs:
-    %gain = net.outputs{end}.processSettings{:}.gain;
-    %ymin = net.outputs{end}.processSettings{:}.ymin;
-    %xoffset = net.outputs{end}.processSettings{:}.xoffset;
-    %output = bsxfun(@plus,bsxfun(@rdivide,bsxfun(@minus,outputs,ymin),gain),xoffset);
-        
-    cnet = copynet(cnet,net);
-    outhat1 = cnet.test(nttpast1);
-    cnet.initFcn = 'previous';
-    cnet = cnet.train(nttpast,out);
-    outhat1 = cnet.test(nttpast1);
-%}
-
+% on the test data
 figure(1234); clf;
 legtxt={};
 plot(real(out1-at(testinds)),'.-','MarkerSize',24,'LineWidth',2);
@@ -243,8 +257,8 @@ legtxt{end+1}='Volterra process - a(0)';
 hold on;
 plot(real(outhat1),'o-','MarkerSize',12,'LineWidth',2);
 legtxt{end+1} = 'complex ML output';
-%plot(real(outlinear1),'o','MarkerSize',12,'LineWidth',2)
-%legtxt{end+1} = 'linear output';
+plot(real(outlinear1),'o','MarkerSize',12,'LineWidth',2)
+legtxt{end+1} = 'linear output';
 plot(real(outri1),'.-','MarkerSize',12,'LineWidth',2)
 legtxt{end+1} = 're/im ML output';
 
@@ -256,7 +270,6 @@ title(sprintf('%s\n %s',txtvt,txtml),'FontSize',24,'FontWeight','bold');
 ax=gca; ax.FontSize=16;
 grid minor; grid;
 boldify;
-
 
 fprintf('mse outhat1 %f outri %f outlinear %f\n',...
     mean(abs(out1-outhat1).^2), ...
