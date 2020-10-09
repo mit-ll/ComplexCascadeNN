@@ -3,10 +3,10 @@
 addpath ./gradient-descent/
 
 
-
 %% check for single complex layer
-
-params.hiddenSize=[]; params.outputFcn='purelin';
+params =[];
+params.hiddenSize=[]; 
+params.outputFcn='purelin';
 params.trainFcn='trainlm';%'Adam2','Vanilla';
 params.initFcn='c-nguyen-widrow';
 params.domap = 0;
@@ -48,7 +48,9 @@ print(net);
 
 %% check for split real/imaginary tansig(i.e. sigmoid) activation
 
-params.hiddenSize=[]; params.outputFcn='sigrealimag'; net = complexnet(params)
+params.hiddenSize=[]; 
+params.outputFcn='sigrealimag'; 
+net = complexnet(params);
 x=randn(1,10000)+1i*randn(1,10000);
 y = net.sigrealimag(x);
 [W] = net.train(x,y);
@@ -57,7 +59,9 @@ plot(real(y),real(out),'.'); hold on;
 plot(imag(y),imag(out),'o');
 
 % input 2 x output 10 checking dimensions of w and Levenberg-Marquardt
-params.hiddenSize=[]; params.outputFcn='purelin';
+params = [];
+params.hiddenSize=[]; 
+params.outputFcn='purelin';
 params.batchtype = 'randperm';
 params.minbatchsize=10;
 params.trainFcn='trainlm';
@@ -74,6 +78,7 @@ b
 %% check for multiple layers
 
 % multiple real layers
+params = [];
 params.hiddenSize=[1 2 2]; 
 params.outputFcn='purelin'; 
 params.trainFcn = 'Adadelta';%'trainlm';
@@ -89,6 +94,7 @@ plot(outhat.','.-'); hold on;   % can't get in^2 easily - use trainlm
 plot(out.');
 
 % check for multiple complex layers
+params = [];
 params.hiddenSize=[1 2 2]; 
 params.outputFcn='purelin';
 params.trainFcn = 'Adadelta';%'trainlm';
@@ -100,6 +106,7 @@ cnet = cnet.train(in,in*(3+5*1i) + (4-2*1i));
 print(cnet)
 
 % purephase multiple layers
+params = [];
 params.hiddenSize=[1]; 
 params.layersFcn='purephase'; 
 params.outputFcn='purelin'; 
@@ -133,7 +140,7 @@ shaperotated = y(1,:) + 1i*y(2,:);
 y= R * [real(shapeO); imag(shapeO)];
 shapeOrotated = y(1,:) + 1i*y(2,:);
 
-params.lrate=1e-2;
+params = [];
 params.nbrofEpochs=1e4;
 params.hiddenSize=[1 2 1];
 params.domap=0;
@@ -167,7 +174,6 @@ plot(outOr,'ro','MarkerSize',12);
 legend('shape train','shape train rotated','net train output',...
     'shape test','shape test rotated', 'net test output','real net test output');
 grid minor; grid;
-boldify;
 
 
 %% nonlinear volterra series
@@ -206,20 +212,22 @@ nttpast1 = ntt(2:end,testinds);
 % linear predictor
 %betahat = conj( (nttpast*nttpast') \ (nttpast * out') );
 %outlinear = betahat'*nttpast;
+params = [];
 params.hiddenSize = [];
 params.layersFcn = 'purelin';params.outputFcn='purelin';
 params.trainFcn = 'Adam2';
 params.initFcn = 'nguyen-widrow';
+params.nbrofEpochs = 3000;
 params.minbatchsize = numel(traininds)/10;
 net = complexnet(params);
 net = net.train(nttpast,out);
 outlinear1 = net.test(nttpast1);
 
 % non-linear predictor
-params=[];
-params.lrate=1e-1;
+params = [];
 params.domap = 1;
-params.hiddenSize = [16 6 ];
+params.hiddenSize = [16 6];
+%params.hiddenSize = [16 6 ]*16;  % wrks for ~7k weights
 params.debugPlots=0;
 params.mu = 1e-3;
 params.trainFcn = 'trainlm'; params.minbatchsize = round(numel(traininds)*0.7);
@@ -227,11 +235,12 @@ params.initFcn = 'nguyen-widrow';
 params.batchtype='fixed';
 params.layersFcn = 'mytansig'; %'mytanh';'sigrealimag2';
 params.outputFcn = 'purelin';
-params.nbrofEpochs = 300;
+params.nbrofEpochs = 1000;
 params.mu_inc = 10;
 params.mu_dec = 1/10;
 
-txtml = sprintf(' complex ML activation:%s layers:[%s]',params.layersFcn,num2str(params.hiddenSize));
+txtml = sprintf('complex ML activation:%s layers:[%s]',...
+    params.layersFcn,num2str(params.hiddenSize));
 cnet = complexnet(params);
 cnet = cnet.train(nttpast,out);
 outhat = cnet.test(nttpast);
@@ -239,8 +248,13 @@ outhat1 = cnet.test(nttpast1);
 
 % matlab predictor
 net = feedforwardnet(params.hiddenSize);
+%net = train(net,realifyfn(nttpast),realifyfn(out));
+%outri = net(realifyfn(nttpast));
+%outri1 = net(realifyfn(nttpast1));
 net = train(net,nttpast,out);
 outri = net(nttpast);
+outri1 = net(nttpast1);
+
 
 % on the training data
 figure(1233); clf;
@@ -271,12 +285,69 @@ ax=gca; ax.FontSize=16;
 grid minor; grid;
 boldify;
 
-fprintf('mse outhat1 %f outri %f outlinear %f\n',...
+fprintf('mse outhat1 %f outri1 %f outlinear1 %f\n',...
     mean(abs(out1-outhat1).^2), ...
-    mean(abs(out1-outri).^2), ...
+    mean(abs(out1-outri1).^2), ...
     mean(abs(out1-outlinear1).^2));
 
-fprintf('mse (less at) outhat1 %f outri %f outlinear %f\n',...
+fprintf('mse (less at) outhat1 %f outri1 %f outlinear1 %f\n',...
     mean(abs(out1-at(testinds)-outhat1).^2), ...
-    mean(abs(out1-at(testinds)-outri).^2), ...
+    mean(abs(out1-at(testinds)-outri1).^2), ...
     mean(abs(out1-at(testinds)-outlinear1).^2));
+%%
+% non-linear function approximation from Hagan & Menhaj
+params = [];
+params.domap = 1;
+params.hiddenSize = [1 15];
+params.debugPlots=0;
+params.mu = 1e-3;
+params.trainFcn = 'trainlm'; 
+params.minbatchsize = round(numel(traininds)*0.7);
+params.initFcn = 'nguyen-widrow';
+params.batchtype='fixed';
+params.layersFcn = 'mytansig'; %'mytanh';'sigrealimag2';
+params.outputFcn = 'purelin';
+params.nbrofEpochs = 300;
+params.mu_inc = 10;
+params.mu_dec = 1/10;
+
+in = randn(1,1000);
+out = 1/2 + 1/4 * sin(3*pi*in);
+
+cnet = complexnet(params);
+cnet = cnet.train(in,out);
+outhat = cnet.test(in);
+figure(101); clf;
+plot(in,out,'.','MarkerSize',18); hold on;
+plot(in,outhat,'o','MarkerSize',12);
+
+cnet.test(0.1)
+1/2 + 1/4 * sin(3*pi*0.1)
+
+
+%%
+% non-linear function approximation from Hagan & Menhaj
+params = [];
+params.domap = 1;
+params.hiddenSize = [4 50];
+params.debugPlots=0;
+params.mu = 1e-3;
+params.trainFcn = 'trainlm'; params.minbatchsize = round(numel(traininds)*0.7);
+params.initFcn = 'nguyen-widrow';
+params.batchtype='fixed';
+params.layersFcn = 'mytansig'; %'mytanh';'sigrealimag2';
+params.outputFcn = 'purelin';
+params.nbrofEpochs = 300;
+params.mu_inc = 10;
+params.mu_dec = 1/10;
+
+in = 2*rand(4,100000)-1;
+out = sin(2*pi*in(1,:)) .* in(2,:).^2 .* in(3,:).^3 .* in(4,:).^4 .* ...
+    exp(-1*(in(1,:)+in(2,:)+in(3,:)+in(4,:)));
+
+cnet = complexnet(params);
+cnet = cnet.train(in,out);
+outhat = cnet.test(in);
+figure(101); clf;
+plot(out,outhat,'.','MarkerSize',18);
+
