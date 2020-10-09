@@ -5,9 +5,6 @@ classdef complexnet < handle
     % Swaroop Appadwedula Gr.64 
     % August 13,2020 in the time of COVID
     
- 
-    
-    
     properties
         hiddenSize   % vector of hidden layer sizes, not including output
                      % empty when single layer                   
@@ -144,11 +141,11 @@ classdef complexnet < handle
                 dz = kval * (z.*(1-z/cval));
                 z = z  + lval;
             else        
-                % same as cval=2, kval=2, 
+                % tansig is the same as cval=2, kval=2, lval = -1
                 lval = -1;
-                z = tansig(x) - lval;
+                z = tansig(x) - lval;      % take out lval for easy dz calculation
                 dz = 2 *( z.*(1 - z / 2) );
-                z = z  + lval;
+                z = z  + lval;             % put back in lval
             end            
             %{ 
             %check with matlab
@@ -737,10 +734,12 @@ classdef complexnet < handle
             
             switch obj.trainFcn
                 case 'trainlm'
-                    totalnbrofParameters = sum(obj.nbrofWeights+obj.nbrofBias);                    
-                    Hessian = zeros(totalnbrofParameters,totalnbrofParameters);
+                    totalnbrofParameters = sum(obj.nbrofWeights+obj.nbrofBias); 
                     Jac = zeros(totalnbrofParameters,nbrofSamplesinBatch);
-                    jace = zeros(totalnbrofParameters,1);                    
+                    % Hessian and Jac*error are derived from Jac and don't
+                    % need to be pre allocated
+                    %Hessian = zeros(totalnbrofParameters,totalnbrofParameters);
+                    %jace = zeros(totalnbrofParameters,1);                                        
                     [layerweightinds,layerbiasinds,matlablayerweightinds,matlablayerbiasinds] = ...
                         getlayerinds(obj);                    
                     [deltaf,DeltaF] = deal(cell(1,obj.nbrofLayers));                    
@@ -758,7 +757,9 @@ classdef complexnet < handle
             msedesired = 0;
             min_grad = 1e-7;
             max_fail = 6;
-            epoch=0; keeptraining = 1; tstart = tic;
+            epoch=0; keeptraining = 1; 
+            testfail = 0;
+            tstart = tic;
             while keeptraining
                 epoch=epoch+1;
                 
@@ -835,7 +836,7 @@ classdef complexnet < handle
                         
                         df_nnplus1 = deltaf{nn+1}; % =0, assigned just for dimensions                        
                         df_nn = deltaf{nn};                               
-                        for mm=1:nbrofSamplesinBatch                            
+                        parfor mm=1:nbrofSamplesinBatch                            
                             % last column of weight has no effect of dc/x{nn}
                             % since it is due to bias (hence the 1:end-1)
                             % hidden layers
@@ -1013,7 +1014,7 @@ classdef complexnet < handle
                             %Hblend = Hessian + mu*ee*( max(real(diag(Hessian))) + 1i*max(imag(diag(Hessian))));
                             
                             if isnan(rcond(Hblend))
-                                error('Condition number of blended Hessian is nan');
+                                error('Condition number of blended Hessian is nan.  What did you do?');
                             end                            
                             
                             %----------------------------------------------
@@ -1072,12 +1073,13 @@ classdef complexnet < handle
                         %}
 
                     otherwise
-                        fn = str2func(obj.trainFcn);
+                        thegradientfunction = str2func(obj.trainFcn);
                         for nn=1:obj.nbrofLayers
                             try
-                                [DeltaW{nn},state{nn}] = fn(DeltaW{nn},state{nn});
+                                [DeltaW{nn},state{nn}] = ...
+                                    thegradientfunction(DeltaW{nn},state{nn});
                             catch
-                                error('Unable to train using %s - check path',obj.trainFcn);
+                                error('Unable to train using %s. Path must have ./gradient_descent',obj.trainFcn);
                             end
                             obj.Weights{nn} = obj.Weights{nn} - DeltaW{nn};
                         end
@@ -1097,10 +1099,12 @@ classdef complexnet < handle
                 msetrain(epoch)= msetrn;
                 msetest(epoch) = msetst;
                 
-                if epoch>1
-                    testfail = testfail + msetst > msetest(epoch-1);
-                else
-                    testfail = 0;
+                if epoch>1 
+                    if msetst > msetest(epoch-1)
+                        testfail = testfail + 1;   % count fail to decrease
+                    else
+                        testfail = 0;              % reset to zero
+                    end
                 end               
                 
                 epochtime = toc(tstart);
@@ -1119,9 +1123,10 @@ classdef complexnet < handle
                 keeptraining = all( struct2array(kt) );
                 
             end % while keeptraining
-            fprintf('mse(%d) train curr %0.3f new %0.3f test %0.3f\n',...
-                epoch,(msecurr),(msetrn),(msetst));
-            fprintf('keeptraining flags (0=exit):\n');
+            
+            fprintf('time to train %0.3f sec mse(%d) train curr %0.3f new %0.3f test %0.3f\n',...
+                epochtime,epoch,(msecurr),(msetrn),(msetst));
+            fprintf('keeptraining flags (0 = exit condition reached):\n');
             disp(kt);
         end
         
