@@ -86,10 +86,12 @@ classdef complexnet < handle
             z=complex(2*rand(m,n)-1,2*rand(m,n)-1);
         end        
         
-        % out = in linear
+        % out = in linear, keeps real and imag separate
         function [z,dz]=purelin(x)
             z=x;
             dz=ones(size(x));
+            %dz.real=ones(size(x));
+            %dz.imag=ones(size(x));            
         end
         
         % phase only
@@ -704,7 +706,9 @@ classdef complexnet < handle
                         %switch nn
                         %    case 2, obj.Weights{2}= [ obj.weightRecord{1}(5) obj.weightRecord{1}(4)];
                         %    case 1, obj.Weights{1}= [ obj.weightRecord{1}(2:3).' obj.weightRecord{1}(1)];
-                        %end                                                
+                        %end                
+                    otherwise
+                        error('unknown initFcn %s for weights',obj.initFcn);
                 end
 
                 
@@ -924,16 +928,27 @@ classdef complexnet < handle
                     case 'trainlm'
 
                         % compute jacobian matrix
+                        jacefromDeltaW = zeros(totalnbrofParameters,1);
                         for nn=1:obj.nbrofLayers
+                            % vectorize the layer weights and bias by
+                            % reshaping first two dimensions into a vector
                             DF=reshape(DeltaF{nn},prod(size(DeltaF{nn},[1 2])),nbrofSamplesinBatch);
+                            
+                            % assingn the appropriate portion of the
+                            % jacobian so it's easier to keep track
                             Jac([layerweightinds{nn} layerbiasinds{nn}],:) = DF;
-                        end                        
-                        jace = Jac*transpose(curr_normalized - trn_normalized)/nbrofSamplesinBatch;
+                            
+                            % jace should be identical to Jac * error
+                            jacefromDeltaW([layerweightinds{nn} layerbiasinds{nn}],:) = DeltaW{nn}(:);
+                            
+                        end                                                
                         Hessian = Jac*Jac'/nbrofSamplesinBatch;
-
-                        % jace should be identical to DeltaW
-                        %jace = transpose( [DeltaW{:}] );
-
+                        
+                        % jace = Jac * error for all real operations
+                        % for complex operations, this fails @todo: why?
+                        %jace = Jac*(transpose(curr_normalized - trn_normalized)/nbrofSamplesinBatch);
+                        jace = jacefromDeltaW;                        
+                        
                         %{
                         % some debugging involving the gain scaling
                         % introduced by the mapminmax.  since it happens to
@@ -948,6 +963,8 @@ classdef complexnet < handle
                         %}                        
                         
                         %--------------------------------------------------
+                        %        D E B U G with MATLAB jacobian
+                        %--------------------------------------------------                        
                         if obj.debugCompare
                             % from "comparenets.m"
                             % sequence to allow for comparing nets:
@@ -1003,13 +1020,16 @@ classdef complexnet < handle
                             keyboard;
                         end
                         %--------------------------------------------------
+                        %        D E B U G
+                        %--------------------------------------------------
                         
                         trn = out(:,batchtrain);
                         msetrn = inf; numstep = 1;
                         ee = eye(size(Hessian));
                         while msetrn>msecurr && mu<obj.mu_max                            
                             % Levenberg Marquardt                            
-                            Hblend = Hessian + mu*ee*(1  + 1i*any(imag(Hessian(:))));
+                            %Hblend = Hessian + mu*ee*(1  + 1i*any(imag(Hessian(:))));
+                            Hblend = Hessian + mu*ee;
                             %Hblend = Hessian + (mu*diag(diag(Hessian)));
                             %Hblend = Hessian + mu*ee*( max(real(diag(Hessian))) + 1i*max(imag(diag(Hessian))));
                             
@@ -1021,10 +1041,10 @@ classdef complexnet < handle
                             % Blended Newton / Gradient 
                             % (i.e. LevenBerg-Marquardt)
                             WbWb = Hblend\jace;       
+                            
                             %----------------------------------------------                            
                                                         
                             for nn=1:obj.nbrofLayers
-
                                 DW = WbWb(layerweightinds{nn},:);
                                 Db = WbWb(layerbiasinds{nn},:);
                                 if isvector(WbWb)
