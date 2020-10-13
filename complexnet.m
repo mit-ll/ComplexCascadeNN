@@ -19,6 +19,7 @@ classdef complexnet < handle
         
         Weights      % cell array with the weights in each layer
         lrate
+        WeightsHistory % history of last 6 weights to choose from
 
         trainFcn     % see options in gradient_descent directory
                      % Hessian-based 'trainlm'=Levenberg-Marquardt
@@ -142,12 +143,15 @@ classdef complexnet < handle
                 z =  cval./(1+exp(-kval*x));
                 dz = kval * (z.*(1-z/cval));
                 z = z  + lval;
-            else        
-                % tansig is the same as cval=2, kval=2, lval = -1
+            elseif 0        
+                % tansig is the same as cval=2, kval=2, lval = -1                
                 lval = -1;
                 z = tansig(x) - lval;      % take out lval for easy dz calculation
                 dz = 2 *( z.*(1 - z / 2) );
                 z = z  + lval;             % put back in lval
+            else
+                z = tansig(x);
+                dz = tansig('da_dn',x);
             end            
             %{ 
             %check with matlab
@@ -159,7 +163,7 @@ classdef complexnet < handle
             figure(1);
             zz=tansig(x); zzp=diff(zz)./diff(x); zzp=tansig('da_dn',x);
             subplot(211);plot(x,z,'.'); hold on; plot(x,zz,'o');
-            subplot(212);plot(x,dz,'.'); hold on; plot(x(1:end-1),zzp,'o');
+            subplot(212);plot(x,dz,'.'); hold on; plot(x(1:end-1),zzp(1:end-1),'o');
             %}
         end
         
@@ -178,13 +182,29 @@ classdef complexnet < handle
         % cval,kval suggested by Benvenuto and Piazza 
         % "On the complex backprop alg" Trans Signal Processing
         function [z,dz]=sigrealimag2(x)
-            cval = 2; kval = 2; lval = -1;
-            zr = ( cval./(1+exp(-kval*real(x))) );
-            zi = ( cval./(1+exp(-kval*imag(x))) );            
-            z = (zr + lval) + 1i*(zi + lval);
-            dz.real = kval * zr.*(1-zr/cval);
-            dz.imag = kval * zi.*(1-zi/cval);
-        end       
+            if 0
+                cval = 2; kval = 2; lval = -1;
+                zr = ( cval./(1+exp(-kval*real(x))) );
+                zi = ( cval./(1+exp(-kval*imag(x))) );
+                z = (zr + lval) + 1i*(zi + lval);
+                dz.real = kval * zr.*(1-zr/cval);
+                dz.imag = kval * zi.*(1-zi/cval);
+            elseif 0
+                % tansig is the same as cval=2, kval=2, lval = -1
+                lval = -1;
+                zr = tansig(real(x)) - lval;      % take out lval for easy dz calculation
+                zi = tansig(imag(x)) - lval;      % take out lval for easy dz calculation
+                dz.real = 2 *( zr.*(1 - zr / 2) );
+                dz.imag = 2 *( zi.*(1 - zi / 2) );
+                zr = zr  + lval;             % put back in lval
+                zi = zi  + lval;             % put back in lval
+                z = (zr + lval) + 1i*(zi + lval);
+            else
+                z = tansig(real(x)) +1i * tansig(imag(x));
+                dz.real = tansig('da_dn',real(x));
+                dz.imag = tansig('da_dn',imag(x));
+            end
+        end
         
         % tanh
         % use tansig instead since mathematically equivalent
@@ -585,6 +605,35 @@ classdef complexnet < handle
             end
         end        
         
+        
+        % inuput is Weights, output is WbWb
+        function WbWb = Weights_to_vec(obj,Weights,layerweightinds,layerbiasinds,totalnbrofParameters)
+            WbWb = zeros(totalnbrofParameters,1);
+            for nn = 1:obj.nbrofLayers
+                % Weights{nn} is output size x input size
+                % input size includes +1 due to bias, so last column is the
+                % bias
+                WbWb([layerweightinds{nn} layerbiasinds{nn}]) = Weights{nn}(:);
+            end            
+        end
+        
+        % input vector is WbWb, output is Weights
+        function Weights = vec_to_Weights(obj,WbWb,layerweightinds,layerbiasinds)
+            Weights = cell(1,obj.nbrofLayers);
+            for nn=1:obj.nbrofLayers
+                W = WbWb(layerweightinds{nn},:);
+                b = WbWb(layerbiasinds{nn},:);
+                if isvector(WbWb)
+                    % single output
+                    W = reshape(W,obj.nbrofUnits(2,nn),obj.nbrofUnits(1,nn)-1);
+                    Weights{nn} = [W b];
+                else
+                    % multiple outputs
+                    error('not handled yet - weights have wrong dimension');
+                end               
+            end
+        end        
+        
         %------------------------------------------------------------------
         function obj = train(obj,in,out)
             % in  is features x number of training samples
@@ -611,7 +660,7 @@ classdef complexnet < handle
             [nbrofInUnits, nbrofSamples] = size(in);
             [nbrofOutUnits, nbr] = size(out);
             if nbr~=nbrofSamples
-                error('input and output number of samples must be identical\n');
+                error('input and output number of samples must be identical');
             end            
             nbrOfNeuronsInEachHiddenLayer = obj.hiddenSize;
              
@@ -744,18 +793,20 @@ classdef complexnet < handle
                     % need to be pre allocated
                     %Hessian = zeros(totalnbrofParameters,totalnbrofParameters);
                     %jace = zeros(totalnbrofParameters,1);                                        
-                    [layerweightinds,layerbiasinds,matlablayerweightinds,matlablayerbiasinds] = ...
-                        getlayerinds(obj);                    
                     [deltaf,DeltaF] = deal(cell(1,obj.nbrofLayers));                    
             end
             
+                        
+            % need a way to vectorize the weights for storage, and for
+            % Jacobian calculations in the LM case
+            [layerweightinds,layerbiasinds,matlablayerweightinds,matlablayerbiasinds] = ...
+                getlayerinds(obj);                    
+
+            
             % update the weights over the epochs
-            [msetrain,msetest] = deal(-1*ones(1,obj.nbrofEpochs));
+            [msetrain,msetest,msevalidate] = deal(-1*ones(1,obj.nbrofEpochs));
             lrate = obj.lrate;
             disp('learning rate is not being used');     
-            
-            batchtrain = randperm(nbrofSamples,nbrofSamplesinBatch);
-            batchtest = setdiff(1:nbrofSamples,batchtrain);       
             
             maxtime = 60*100;
             msedesired = 0;
@@ -769,22 +820,27 @@ classdef complexnet < handle
                 
                 printthisepoch = (epoch/obj.printmseinEpochs == floor(epoch/obj.printmseinEpochs));
                 
-                % pick a batch for this epoch
+                % pick a batch for this epoch for training
                 switch obj.batchtype
                     case 'randperm'
-                        % pick a batch for this epoch
                         batchtrain = randperm(nbrofSamples,nbrofSamplesinBatch);
-                        batchtest = setdiff(1:nbrofSamples,batchtrain);                        
                     case 'fixed'
                         batchtrain = 1:nbrofSamplesinBatch;
-                        batchtest = batchtrain(end):nbrofSamples;
-                        %batch stays the same, so mse can be examined for
-                        %changes
-                end
+                end                
+                % testing and validation each get 1/2 of the remainder
+                batchleft = setdiff(1:nbrofSamples,batchtrain); L = length(batchleft);
+                L2 = floor(L/2);                
+                batchtest = batchleft(1:L2);                
+                batchvalidate = batchleft(L2+1:end);
                 
-                trn_normalized = out_normalized(:,batchtrain);           % desired y{nbrofLayers}
-                trn = out(:,batchtrain);           
-                                
+                % training, testing, and validation
+                trn_normalized = out_normalized(:,batchtrain);
+                trn = out(:,batchtrain);                
+                tst_normalized = out_normalized(:,batchtest);
+                tst = out(:,batchtest);                
+                vl_normalized = out_normalized(:,batchvalidate);
+                vl = out(:,batchvalidate);
+                
                 % evaluate network and obtain gradients and intermediate values
                 % y{end} is the output
                 [curr,x,y0,y,yprime] = obj.test( in(:,batchtrain) );
@@ -928,7 +984,6 @@ classdef complexnet < handle
                     case 'trainlm'
 
                         % compute jacobian matrix
-                        jacefromDeltaW = zeros(totalnbrofParameters,1);
                         for nn=1:obj.nbrofLayers
                             % vectorize the layer weights and bias by
                             % reshaping first two dimensions into a vector
@@ -938,16 +993,21 @@ classdef complexnet < handle
                             % jacobian so it's easier to keep track
                             Jac([layerweightinds{nn} layerbiasinds{nn}],:) = DF;
                             
-                            % jace should be identical to Jac * error
-                            jacefromDeltaW([layerweightinds{nn} layerbiasinds{nn}],:) = DeltaW{nn}(:);
-                            
                         end                                                
-                        Hessian = Jac*Jac'/nbrofSamplesinBatch;
+                        Hessian = (Jac*Jac')/nbrofSamplesinBatch;
                         
-                        % jace = Jac * error for all real operations
-                        % for complex operations, this fails @todo: why?
+                        % Use the radient way of calculating 
+                        % jace = Jacobian * error, since this propagates 
+                        % the error real,im parts correctly.  
+                        % For the Hessian = Jacobian * Jacobian', the 
+                        % LM computation is correct since this involves 
+                        % the propagation of the function and current 
+                        % weights derivatives and does not involve the 
+                        % current error.                        
+                        % Only use this line for real only case:
                         %jace = Jac*(transpose(curr_normalized - trn_normalized)/nbrofSamplesinBatch);
-                        jace = jacefromDeltaW;                        
+                        % this line works for real and complex case:
+                        jace = Weights_to_vec(obj,DeltaW,layerweightinds,layerbiasinds,totalnbrofParameters);                                                
                         
                         %{
                         % some debugging involving the gain scaling
@@ -1044,17 +1104,9 @@ classdef complexnet < handle
                             
                             %----------------------------------------------                            
                                                         
-                            for nn=1:obj.nbrofLayers
-                                DW = WbWb(layerweightinds{nn},:);
-                                Db = WbWb(layerbiasinds{nn},:);
-                                if isvector(WbWb)
-                                    % single output
-                                    DW = reshape(DW,obj.nbrofUnits(2,nn),obj.nbrofUnits(1,nn)-1);
-                                    DeltaW{nn} = [DW Db];
-                                else
-                                    % multiple outputs
-                                    error('not handled yet - weights have wrong dimension');
-                                end
+                            % convert vector to Weights
+                            DeltaW = vec_to_Weights(obj,WbWb,layerweightinds,layerbiasinds);
+                            for nn=1:obj.nbrofLayers                              
                                 if obj.debugPlots && printthisepoch
                                     figure(1024);
                                     subplot(obj.nbrofLayers,1,nn)
@@ -1063,6 +1115,7 @@ classdef complexnet < handle
                                 end                                
                                 obj.Weights{nn} = obj.Weights{nn} -  DeltaW{nn};
                             end
+                            
                             curr = obj.test( in(:,batchtrain) );
                             % Check the mse for the update
                             msetrn = mean( abs(curr(:)-trn(:)).^2 );
@@ -1081,7 +1134,7 @@ classdef complexnet < handle
                                 end
                             else
                                 % as mu decreases, becomes Newton's method
-                                mu=mu*obj.mu_dec;                                
+                                mu=mu*obj.mu_dec;                                    
                             end
                         end                                                
                        
@@ -1105,32 +1158,40 @@ classdef complexnet < handle
                         end
                 end
                 
+                % if you want a history of the weights in vector form
+                %WeightsHistory(:,epoch) = Weights_to_vec(obj,Weights,layerweightinds,layerbiasinds,totalnbrofParameters);
                 
-                % Check the mse for the update
-                trn = out(:,batchtrain);           
+                % Check the mses for the update
                 curr = obj.test( in(:,batchtrain) );
                 msetrn = mean( abs(curr(:)-trn(:)).^2 );            
-                
-                % Check the mse for the update
-                trn = out(:,batchtest);           
                 curr = obj.test( in(:,batchtest) );
-                msetst = mean( abs(curr(:)-trn(:)).^2 );                                
+                msetst = mean( abs(curr(:)-tst(:)).^2 );                                
+                curr = obj.test( in(:,batchvalidate) );
+                msevl = mean( abs(curr(:)-vl(:)).^2 );                                
                                              
                 msetrain(epoch)= msetrn;
                 msetest(epoch) = msetst;
+                msevalidate(epoch) = msevl;
+
+                %if (epoch>max_fail)
+                %    msemin = min(msetest(1: epoch-max_fail) );
+                %    if msetst > msemin + eps
+                %        testfail = max_fail;
+                %    end
+                %end
                 
                 if epoch>1 
-                    if msetst > msetest(epoch-1)
+                    if msevl > msevalidate(epoch-1) + eps
                         testfail = testfail + 1;   % count fail to decrease
                     else
                         testfail = 0;              % reset to zero
                     end
-                end               
+                end          
                 
                 epochtime = toc(tstart);
                                 
                 if printthisepoch
-                    fprintf('mse(%d) train msecurr %0.3f msetrn %0.3f msetest %0.3f\n',...
+                    fprintf('mse(%d) train msecurr %f msetrn %f msetest %f\n',...
                         epoch,(msecurr),(msetrn),(msetst));
                 end                                
                 
@@ -1144,10 +1205,19 @@ classdef complexnet < handle
                 
             end % while keeptraining
             
-            fprintf('time to train %0.3f sec mse(%d) train curr %0.3f new %0.3f test %0.3f\n',...
+            fprintf('time to train %0.3f sec, mse(%d) train curr %f new %f test %f\n',...
                 epochtime,epoch,(msecurr),(msetrn),(msetst));
             fprintf('keeptraining flags (0 = exit condition reached):\n');
             disp(kt);
+            
+            if obj.debugPlots || 1
+                figure(231); clf;
+                semilogy(msetrain(1:epoch),'.-'); hold on;
+                semilogy(msetest(1:epoch),'+-');
+                semilogy(msevalidate(1:epoch),'o-');
+                legend('train','test','validate');
+            end            
+            
         end
         
         

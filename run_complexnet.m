@@ -187,7 +187,7 @@ grid minor; grid;
 choice = 'simple';
 switch choice
     case 'simple'        
-        xt = randn(1,10000) + 0*1i*randn(1,10000);
+        xt = randn(1,10000) + 1i*randn(1,10000);
         L = length(xt);
         %beta = [ 0.3 + 0.7*1i, 0.7 - 0.3*1i]; lags = { [1,2] , [1,3] };
         beta = [ 1, 0.3 + 0*0.7*1i]; 
@@ -206,31 +206,12 @@ switch choice
         beta = [ -0.78 -1.48, 1.39, 0.04, 0.54, 3.72, 1.86, -0.76,...
             -1.62, 0.76, -0.12, 1.41, -1.52, -0.13];
         lags = { [0], [1], [2], [3] [0,0], [0 1], [0 2], [0,3], ...
-            [1,1], [1,2], [1,3], [2,2], [2,3], [3,3]};
-        
+            [1,1], [1,2], [1,3], [2,2], [2,3], [3,3]};        
         numlagsnet = 10+1;
 end
 
-numlags = max(max([lags{:}]))+1; xtt = zeros(numlags,L);
-for ll=0:numlags-1
-    xtt(ll+1, ll + (1:L-ll) ) = xt(1:L-ll);
-end
+[xtt,yt,txtvt] = volterra(xt,lags,beta);
 
-yt = zeros(size(xt));
-txtvt='Volterra process a~N(0,1): n(t) =';
-for term = 1:length(beta)
-    lagst = lags{term};
-    if numel(lagst)==2
-        toadd = xtt( 1+lagst(1),:) .* conj(xtt( 1+lagst(2),:));
-        txtvt = sprintf('%s\n  + (%0.3f + i%0.3f) a(t-%d) a(t-%d)',txtvt, ...
-            real(beta(term)),imag(beta(term)),lags{term}(1),lags{term}(2));
-    else
-        toadd = xtt( 1+lagst(1),:);        
-        txtvt = sprintf('%s\n + (%0.3f + i%0.3f) a(t-%d)',txtvt, ...
-            real(beta(term)),imag(beta(term)),lags{term}(1));    
-    end
-    yt = yt + beta(term) * toadd;
-end
 
 switch choice
     case 'many'
@@ -241,14 +222,12 @@ switch choice
         yt = yt + sigma * randn(size(yt));
 end
 
-
 % setup the samples available for prediction (up to numlags delays)
 L = length(yt);
 ytt = zeros(numlagsnet,L);
 for ll=0:numlagsnet-1
     ytt(ll+1, ll + (1:L-ll) ) = yt(1:L-ll);
 end
-
 
 traininds = 1:L/2; 
 testinds=(L/2+1):L;
@@ -286,15 +265,15 @@ outlinear1 = net.test(inpast1);
 % non-linear predictor
 params = [];
 params.domap = 1;
-params.hiddenSize = [16 6];
+params.hiddenSize = [16 6 4];
 %params.hiddenSize = [16 6 ]*16;  % wrks for ~7k weights
 params.debugPlots=0;
 params.mu = 1e-3;
 params.trainFcn = 'trainlm'; params.minbatchsize = round(numel(traininds)*0.7);
 params.batchtype='fixed';
 if any(imag(inpast(:)))
-    params.initFcn = 'c-nguyen-widrow';'crandn';
-    params.layersFcn = 'cartrelu';'satlins';'sigrealimag2';
+    params.initFcn = 'c-nguyen-widrow';
+    params.layersFcn = 'sigrealimag2';'cartrelu';'satlins';
 else
     params.initFcn = 'nguyen-widrow';'randn';
     params.layersFcn = 'mytansig'; %'mytanh';
@@ -431,4 +410,200 @@ cnet = cnet.train(in,out);
 outhat = cnet.test(in);
 figure(101); clf;
 plot(out,outhat,'.','MarkerSize',18);
+
+%% clipping narrowband functions in the passband
+
+% random noise
+crandn = @(m,n) complex(randn(m,n),randn(m,n))/sqrt(2);
+
+% some clipping nonlinearties for real passband inpput
+clipfn = @(x,a) ( x.*(abs(x)<=a) + a*sign(x).*(abs(x)>a));
+clip1fn = @(x) x./abs(x);
+clip2fn = @(x) ( real(x).*(real(x)<=1) + real(x)>1 ) + ...
+    1i* ( imag(x).*(imag(x)<=1) + imag(x)>1 );
+
+bw = 1e6;
+fc = 1e9;  % (Hz) center frequency
+fs = 2*(fc+bw); % (Hz) sample rate
+
+%---------------------------------------------
+% create a random signal with given bandwidth
+num=1e6;
+zbb = crandn(1,num);
+lpFilt = designfilt('lowpassfir', 'PassbandFrequency', bw/(fs/2),...
+    'StopbandFrequency', bw/(fs/2)*1.1, 'PassbandRipple', 0.5, ...
+    'StopbandAttenuation', 65, 'DesignMethod', 'kaiserwin');
+[Gd,w] = grpdelay(lpFilt);
+zbb=filter(lpFilt,zbb);
+zbb=zbb(Gd(1):end);
+%---------------------------------------------
+
+
+% modulate to passband fc
+tvec = (0:length(zbb)-1)/fs; s = exp(1i*2*pi*fc*tvec);
+zpass = real(zbb).*real(s) - imag(zbb).*imag(s);
+
+
+% apply a nonlinear function to zpass (e.g. clipping) -> znl
+nlChoice = 'volterra';
+switch nlChoice
+    case 'clip'
+        clipleveldB = -3; %-20
+        znl = clipfn(zpass, 10^(clipleveldB/10) * median(abs(zpass))/sqrt(2));
+    case 'volterra'
+        %beta = [ 0.3 + 0.7*1i, 0.7 - 0.3*1i]; lags = { [1,2] , [1,3] };
+        beta = [ 1, 0.3 + 0*0.7*1i];
+        lags = { [0], [1,2] };        
+        numlagsnet = 6+1;
+        [zpasst,znl,txtvt] = volterra(zpass,lags,beta);
+end
+
+zbbnl = znl.*real(s) - 1i*znl.*imag(s);
+zbbnl = filter(lpFilt,zbbnl); 
+zbbnl = 2*zbbnl(Gd(1):end);
+
+zbbrx = zpass.*real(s) - 1i*zpass.*imag(s);
+zbbrx = filter(lpFilt,zbbrx); 
+zbbrx = 2*zbbrx(Gd(1):end);
+
+yt = zbbnl;
+
+% setup the samples available for prediction (up to numlags delays)
+L = length(yt);
+ytt = zeros(numlagsnet,L);
+for ll=0:numlagsnet-1
+    ytt(ll+1, ll + (1:L-ll) ) = yt(1:L-ll);
+end
+
+traininds = 1:L/2; 
+testinds=(L/2+1):L;
+out = yt(traininds);
+out1 = yt(testinds);
+
+inpast = ytt(2:end,traininds);
+inpast1 = ytt(2:end,testinds);
+
+figure(131);clf;
+subplot(211); 
+plot(real(zbb),'.'); hold on;
+plot(real(zbbrx),'.');
+plot(real(zbbnl),'.');
+
+subplot(212); 
+plot(imag(zbb),'.'); hold on;
+plot(imag(zbbrx),'.');
+plot(imag(zbbnl),'.');
+
+figure(132);clf;
+subplot(211);
+plot(abs(zbbrx),'.'); hold on;
+plot(abs(zbbnl) * max(abs(zbbrx))/max(abs(zbbnl)),'.');
+subplot(212);
+plot(angle(zbbrx));hold on;
+plot(angle(zbbnl))
+
+
+% non-linear predictor
+params = [];
+params.domap = 1;
+params.hiddenSize = [16 6 4];
+%params.hiddenSize = [16 6 ]*16;  % wrks for ~7k weights
+params.debugPlots=0;
+params.mu = 1e-3;
+params.trainFcn = 'trainlm'; params.minbatchsize = round(numel(traininds)*0.7);
+params.batchtype='fixed';
+if any(imag(inpast(:)))
+    params.initFcn = 'c-nguyen-widrow';
+    params.layersFcn = 'sigrealimag2';'cartrelu';'satlins';
+else
+    params.initFcn = 'nguyen-widrow';'randn';
+    params.layersFcn = 'mytansig'; %'mytanh';
+end
+params.outputFcn = 'purelin';
+params.nbrofEpochs = 1000;
+params.mu_inc = 10;
+params.mu_dec = 1/10;
+
+txtml = sprintf('complex ML activation:%s layers:[%s]',...
+    params.layersFcn,num2str(params.hiddenSize));
+
+if 1
+    cnet = complexnet(params);
+    cnet = cnet.train(inpast,out);
+    outhat = cnet.test(inpast);
+    outhat1 = cnet.test(inpast1);
+else
+    params.initFcn = 'nguyen-widrow'
+    params.layersFcn = 'mytansig'
+    cnet = complexnet(params);
+    cnet = cnet.train(realifyfn(inpast),realifyfn(out));
+    outhat = cnet.test(realifyfn(inpast)); outhat = outhat(1:end/2,:) + 1i * outhat(end/2+1:end,:);
+    outhat1 = cnet.test(realifyfn(inpast1)); outhat1 = outhat1(1:end/2,:) + 1i * outhat1(end/2+1:end,:);
+end
+
+% matlab predictor
+net = feedforwardnet(params.hiddenSize);
+if any(imag(inpast(:)))
+    net = train(net,realifyfn(inpast),realifyfn(out));
+    outri = net(realifyfn(inpast)); outri = outri(1:end/2,:) + 1i * outri(end/2+1:end,:);
+    outri1 = net(realifyfn(inpast1)); outri1 = outri1(1:end/2,:) + 1i * outri1(end/2+1:end,:);
+else
+    net = train(net,inpast,out);
+    outri = net(inpast);
+    outri1 = net(inpast1);
+end
+
+figure(1233); clf;
+if any(imag(inpast(:)))
+    subplot(211)
+    plot(real(out-0*yt(traininds)),'g.-','MarkerSize',20); hold on;
+    plot(real(outhat),'r.-');
+    plot(real(outri),'k.-')
+    xlim([1 100]);
+    subplot(212)
+    plot(imag(out-0*yt(traininds)),'g.-','MarkerSize',20); hold on;
+    plot(imag(outhat),'r.-');
+    plot(imag(outri),'k.-')
+    xlim([1 100]);
+else
+    plot(real(out-0*yt(traininds)),'g.-'); hold on;
+    plot(real(outhat),'r.-');
+    plot(real(outri),'k.-')
+    xlim([1 100]);    
+end
+
+
+
+% on the test data
+figure(1234); clf;
+legtxt={};
+plot(real(out1),'.-','MarkerSize',24,'LineWidth',2);
+legtxt{end+1}='Volterra process - a(0)';
+hold on;
+plot(real(outhat1),'o-','MarkerSize',12,'LineWidth',2);
+legtxt{end+1} = 'complex ML output';
+%plot(real(outlinear1),'o','MarkerSize',12,'LineWidth',2)
+%legtxt{end+1} = 'linear output';
+plot(real(outri1),'.-','MarkerSize',12,'LineWidth',2)
+legtxt{end+1} = 're/im ML output';
+
+legend(legtxt,'FontSize',24,'FontWeight','bold');
+%xlim([1 200]);
+xlabel('sample number','FontSize',24,'FontWeight','bold');
+ylabel('Real part of samples','FontSize',24,'FontWeight','bold');
+title(sprintf('%s\n %s',txtvt,txtml),'FontSize',24,'FontWeight','bold');
+ax=gca; ax.FontSize=16;
+grid minor; grid;
+%boldify;
+
+fprintf('mse outhat1 %f outri1 %f outlinear1 %f\n',...
+    mean(abs(out1(:)-outhat1(:)).^2), ...
+    mean(abs(out1(:)-outri1(:)).^2), ...
+    mean(abs(out1(:)-outlinear1(:)).^2));
+
+xtinds = xt(testinds);
+fprintf('mse (less xt) outhat1 %f outri1 %f outlinear1 %f\n',...
+    mean(abs(out1(:)-xtinds(:)-outhat1(:)).^2), ...
+    mean(abs(out1(:)-xtinds(:)-outri1(:)).^2), ...
+    mean(abs(out1(:)-xtinds(:)-outlinear1(:)).^2));
 
