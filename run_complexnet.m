@@ -22,7 +22,7 @@ params=[];
 params.hiddenSize=[1];
 params.layersFcn='purelin';
 params.outputFcn='purelin';
-params.trainFcn='RAdam';
+params.trainFcn='trainlm';'RAdam';
 params.initFcn='nguyen-widrow';
 cnet = complexnet(params);
 x=randn(1,100);
@@ -55,16 +55,18 @@ x=randn(1,10000)+1i*randn(1,10000);
 y = net.sigrealimag(x);
 [W] = net.train(x,y);
 out = net.test(x);
+figure(1021);
 plot(real(y),real(out),'.'); hold on;
 plot(imag(y),imag(out),'o');
 
 % input 2 x output 10 checking dimensions of w and Levenberg-Marquardt
 params = [];
-params.hiddenSize=[]; 
+params.hiddenSize=[1];
+params.layerFcn='sigrealimag'; 
 params.outputFcn='purelin';
 params.batchtype = 'randperm';
 params.minbatchsize=10;
-params.trainFcn='trainlm';
+params.trainFcn='Adadelta';'trainlm';
 net = complexnet(params)
 x = randn(2,100)+1i*randn(2,100);
 w = (randn(10,2)+1i*randn(10,2));
@@ -116,12 +118,20 @@ params.hiddenSize=[1];
 params.layersFcn='purephase'; 
 params.outputFcn='purelin'; 
 params.hiddenSize=[1 2 2]; 
-params.trainFcn = 'Adadelta';%'trainlm';
+params.trainFcn = 'trainlm';
 params.nbrofEpochs=1e4;
 cnet = complexnet(params);
-in=randn(1,200)+1i*randn(1,200); 
+in = randn(1,200)+1i*randn(1,200); 
 cnet = cnet.train(in,(3+3*1i)* (in./abs(in)) );
+
+in1 = randn(1,200)+1i*randn(1,200); 
+outhat1 = cnet.test(in1);
+out1 = (3+3*1i)* (in1./abs(in1));
+figure(101);clf;
+subplot(211); plot( real(out1)); hold on; plot(real(outhat1));
+subplot(212); plot( imag(out1)); hold on; plot(imag(outhat1));
 print(cnet)
+
 
 %% rotation example (as in Nitta)
 
@@ -187,7 +197,7 @@ grid minor; grid;
 choice = 'simple';
 switch choice
     case 'simple'        
-        xt = randn(1,10000) + 1i*randn(1,10000);
+        xt = randn(1,10000) + 0*1i*randn(1,10000);
         L = length(xt);
         %beta = [ 0.3 + 0.7*1i, 0.7 - 0.3*1i]; lags = { [1,2] , [1,3] };
         beta = [ 1, 0.3 + 0*0.7*1i]; 
@@ -279,7 +289,7 @@ else
     params.layersFcn = 'mytansig'; %'mytanh';
 end
 params.outputFcn = 'purelin';
-params.nbrofEpochs = 1000;
+params.nbrofEpochs = 100;
 params.mu_inc = 10;
 params.mu_dec = 1/10;
 
@@ -596,6 +606,34 @@ title(sprintf('%s\n %s',txtvt,txtml),'FontSize',24,'FontWeight','bold');
 ax=gca; ax.FontSize=16;
 grid minor; grid;
 %boldify;
+
+
+
+% on the test data
+figure(1234+1); clf;
+legtxt={};
+plot(imag(out1),'.-','MarkerSize',24,'LineWidth',2);
+legtxt{end+1}='Volterra process - a(0)';
+hold on;
+plot(imag(outhat1),'o-','MarkerSize',12,'LineWidth',2);
+legtxt{end+1} = 'complex ML output';
+%plot(real(outlinear1),'o','MarkerSize',12,'LineWidth',2)
+%legtxt{end+1} = 'linear output';
+plot(imag(outri1),'.-','MarkerSize',12,'LineWidth',2)
+legtxt{end+1} = 're/im ML output';
+
+legend(legtxt,'FontSize',24,'FontWeight','bold');
+%xlim([1 200]);
+xlabel('sample number','FontSize',24,'FontWeight','bold');
+ylabel('Imag part of samples','FontSize',24,'FontWeight','bold');
+title(sprintf('%s\n %s',txtvt,txtml),'FontSize',24,'FontWeight','bold');
+ax=gca; ax.FontSize=16;
+grid minor; grid;
+%boldify;
+
+
+
+
 
 fprintf('mse outhat1 %f outri1 %f outlinear1 %f\n',...
     mean(abs(out1(:)-outhat1(:)).^2), ...
