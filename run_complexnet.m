@@ -428,7 +428,7 @@ fs = 2*(fc+bw); % (Hz) sample rate
 
 %---------------------------------------------
 % create a random signal with given bandwidth
-num=1e6;
+num=1e5;
 zbb = crandn(1,num);
 lpFilt = designfilt('lowpassfir', 'PassbandFrequency', bw/(fs/2),...
     'StopbandFrequency', bw/(fs/2)*1.1, 'PassbandRipple', 0.5, ...
@@ -450,6 +450,7 @@ switch nlChoice
     case 'clip'
         clipleveldB = -3; %-20
         znl = clipfn(zpass, 10^(clipleveldB/10) * median(abs(zpass))/sqrt(2));
+        numlagsnet=2
     case 'volterra'
         %beta = [ 0.3 + 0.7*1i, 0.7 - 0.3*1i]; lags = { [1,2] , [1,3] };
         beta = [ 1, 0.3 + 0*0.7*1i];
@@ -506,7 +507,7 @@ plot(angle(zbbnl))
 % non-linear predictor
 params = [];
 params.domap = 1;
-params.hiddenSize = [16 6 4];
+params.hiddenSize = [16 6 ];
 %params.hiddenSize = [16 6 ]*16;  % wrks for ~7k weights
 params.debugPlots=0;
 params.mu = 1e-3;
@@ -606,4 +607,41 @@ fprintf('mse (less xt) outhat1 %f outri1 %f outlinear1 %f\n',...
     mean(abs(out1(:)-xtinds(:)-outhat1(:)).^2), ...
     mean(abs(out1(:)-xtinds(:)-outri1(:)).^2), ...
     mean(abs(out1(:)-xtinds(:)-outlinear1(:)).^2));
+
+%% example 12.5 from neural network design 
+% for checking Jacobian calculation
+
+in = [1 2];
+out = [1 2];
+
+% non-linear predictor
+params = [];
+params.domap = 0;
+params.hiddenSize = [1];
+params.debugPlots=1;
+params.mu = 1e-3;
+params.trainFcn = 'trainlm'; params.minbatchsize = length(in);
+params.batchtype='fixed';
+params.layersFcn{1} = 'square';
+params.layersFcn{2} = 'purelin';
+params.outputFcn = 'purelin';
+params.initFcn = 'previous';
+params.nbrofEpochs = 1;
+
+cnet = complexnet(params);
+cnet.Weights{1} = [1 0];
+cnet.Weights{2} = [2 1];
+cnet.debugCompare = 1;
+
+cnet.train(in,out)
+
+% matches with text
+%Jac =
+%
+%     4    16
+%     4     8
+%     1     4
+%     1     1
+
+
 

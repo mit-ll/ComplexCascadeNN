@@ -75,7 +75,11 @@ classdef complexnet < handle
             y=[real(x); imag(x)];
         end
         function x=unrealify(y)
-            x=y(1:end/2,:) + 1i*y(end/2+1:end,:);
+            if size(y,1)/2 ~= floor(size(y,1)/2)
+                error('unrealify takes first half of features + 1i * second half of features');
+            else
+                x=y(1:end/2,:) + 1i*y(end/2+1:end,:);
+            end
         end
         
         
@@ -86,6 +90,11 @@ classdef complexnet < handle
         function z=crand(m,n)
             z=complex(2*rand(m,n)-1,2*rand(m,n)-1);
         end        
+        
+        function [z,dz] = square(x)
+            z = x.*x;
+            dz = 2 * x;
+        end
         
         % out = in linear, keeps real and imag separate
         function [z,dz]=purelin(x)
@@ -312,7 +321,15 @@ classdef complexnet < handle
             
             % hidden layers
             for ll=1:length(obj.layers)-1
-                obj.layers{ll}.transferFcn = layersFcn;                 
+                if iscell(layersFcn)
+                    if numel(layersFcn)==length(obj.layers)
+                        obj.layers{ll}.transferFcn = layersFcn{ll};
+                    end
+                elseif char(layersFcn)
+                    obj.layers{ll}.transferFcn = layersFcn;
+                else
+                    error('Unknown layersFcn variable type');
+                end
                 % each weight matrix is output size x input size since it
                 % is applied on the left of the input vector
                 % obj.Weights{ll} * x{ll}                
@@ -642,7 +659,15 @@ classdef complexnet < handle
             if obj.domap
                 % per feature normalization into -1 1
                 [in_normalized,obj.inputSettings] = mapminmax(obj.realify(in));
+                %gg = obj.inputSettings.gain;
+                %gg = max([gg(1:end/2) gg(end/2+1:end)],[],2);
+                %gg = repmat(gg,2,1);
+                %obj.inputSettings.gain = gg;                
                 [out_normalized,obj.outputSettings] = mapminmax(obj.realify(out));
+                %gg = obj.outputSettings.gain;
+                %gg = max([gg(1:end/2) gg(end/2+1:end)],[],2);
+                %gg = repmat(gg,2,1);
+                %obj.outputSettings.gain = gg;                                
                 in_normalized = obj.unrealify(in_normalized);
                 out_normalized = obj.unrealify(out_normalized);                
             else
@@ -652,7 +677,9 @@ classdef complexnet < handle
                 %in_normalized = bsxfun(@times,in,obj.inputSettings.gain);
                 %out_normalized = bsxfun(@times,out,obj.outputSettings.gain);
                 
-                % no normalization
+                % no normalization for real or imag
+                obj.inputSettings.gain = ones(2*size(in,1),1);
+                obj.outputSettings.gain = ones(2*size(out,1),1);                
                 in_normalized=in;
                 out_normalized=out;
             end
@@ -743,7 +770,10 @@ classdef complexnet < handle
                             error('change obj.initFcn=%s, since previous weights are empty',obj.initFcn);
                         end
                         if any( size(obj.Weights{nn})~= [obj.nbrofUnits(2,nn), obj.nbrofUnits(1,nn)])
-                            error('change obj.initFcn=%s, since previous weights dimensions not matching',obj.initFcn);
+                            fprintf('layer%d Weights %d x %d ~= dimensions %d x %d\n',nn,...
+                                size(obj.Weights{nn},1),size(obj.Weights{nn},2),...
+                                obj.nbrofUnits(2,nn), obj.nbrofUnits(1,nn));
+                            error('change obj.initFcn=%s, since previous weights dimensions not matching',obj.initFcn);                            
                         end
                         
                         % example debugging options
@@ -881,10 +911,28 @@ classdef complexnet < handle
                         % w = w - mu (y-d) f'(net*) x*                        
                         if splitrealimag(nn)
                             deltax{nn} = real(curr_normalized - trn_normalized) .* yprime{nn}.real + ...
-                                1i*imag(curr_normalized - trn_normalized) .* yprime{nn}.imag;                            
+                                1i*imag(curr_normalized - trn_normalized) .* yprime{nn}.imag;         
+
+                            % have to include the 1/gain on the output
+                            % since mse is computed there
+                            % @todo: a better way is to make a ouput
+                            % weighting node
+                            aa = bsxfun(@rdivide, real(curr - trn), obj.outputSettings.gain(1:end/2));
+                            bb = bsxfun(@rdivide, imag(curr - trn), obj.outputSettings.gain(end/2+1:end));                            
+                            deltax{nn} = aa .* yprime{nn}.real + 1i* bb.* yprime{nn}.imag;         
+                                                        
                             deltaf{nn} = yprime{nn}.real + 1i* yprime{nn}.imag;                            
                         else
                             deltax{nn} = (curr_normalized - trn_normalized) .* conj( yprime{nn} );
+                            
+                            % have to include the 1/gain on the output
+                            % since mse is computed there
+                            % @todo: a better way is to make a ouput
+                            % weighting node
+                            aa = bsxfun(@rdivide, real(curr - trn), obj.outputSettings.gain(1:end/2));
+                            bb = bsxfun(@rdivide, imag(curr - trn), obj.outputSettings.gain(end/2+1:end));                            
+                            deltax{nn} = (aa + 1i* bb) .* conj( yprime{nn} );
+                            
                             deltaf{nn} = conj( yprime{nn} );
                         end                        
                     else 
@@ -993,10 +1041,11 @@ classdef complexnet < handle
                             % jacobian so it's easier to keep track
                             Jac([layerweightinds{nn} layerbiasinds{nn}],:) = DF;
                             
-                        end                                                
-                        Hessian = (Jac*Jac')/nbrofSamplesinBatch;
+                        end                       
+                        Jac = Jac / (obj.outputSettings.gain(1) * sqrt(nbrofSamplesinBatch));
+                        Hessian = (Jac*Jac');
                         
-                        % Use the radient way of calculating 
+                        % Use the gradient way of calculating 
                         % jace = Jacobian * error, since this propagates 
                         % the error real,im parts correctly.  
                         % For the Hessian = Jacobian * Jacobian', the 
@@ -1005,25 +1054,14 @@ classdef complexnet < handle
                         % weights derivatives and does not involve the 
                         % current error.                        
                         % Only use this line for real only case:
-                        %jace = Jac*(transpose(curr_normalized - trn_normalized)/nbrofSamplesinBatch);
+                        %jace = Jac*transpose(curr_normalized - trn_normalized);
                         % this line works for real and complex case:
                         jace = Weights_to_vec(obj,DeltaW,layerweightinds,layerbiasinds,totalnbrofParameters);                                                
                         
-                        %{
-                        % some debugging involving the gain scaling
-                        % introduced by the mapminmax.  since it happens to
-                        % both in JJ' and J'e, the scaling drops out except
-                        % in mu*Identity
-                        if obj.domap
-                        jace =  real(jace)/obj.outputSettings.gain(1) + ...
-                            1i*imag(jace)/obj.outputSettings.gain(2);
-                        Hessian =  real(Hessian)/obj.outputSettings.gain(1) + ...
-                            1i*imag(Hessian)/obj.outputSettings.gain(2);
-                        end
-                        %}                        
                         
                         %--------------------------------------------------
                         %        D E B U G with MATLAB jacobian
+                        % this is mostly code for deep numerical dive
                         %--------------------------------------------------                        
                         if obj.debugCompare
                             % from "comparenets.m"
@@ -1034,49 +1072,113 @@ classdef complexnet < handle
                             % save initial weights
                             % train while saving Records of je,jj
                             % copynet to copy the records
-                            % 
+                            %
                             % matlab uses bias, weights, ... convention
-                            %[b,IW,LW] = separatewb(net,weightRecord{1});  
-
-                            wr = obj.weightRecord{epoch};                            
-                            jer = obj.jeRecord{epoch};
-                            jjr = obj.jjRecord{epoch};
-                            wr2 = obj.weightRecord2{epoch};                            
+                            %[b,IW,LW] = separatewb(net,weightRecord{1});
                             
-                            Weightsmatlab = cell(1,obj.nbrofLayers);
-                            Weightsmatlab2 = cell(1,obj.nbrofLayers);                            
-                            for nn=1:obj.nbrofLayers 
-                                dim_out = obj.nbrofUnits(2,nn);
-                                dim_in = obj.nbrofUnits(1,nn)-1;
-
-                                b = wr(matlablayerbiasinds{nn});
-                                w = wr(matlablayerweightinds{nn});
-                                w = reshape( w, dim_out,dim_in);
-                                Weightsmatlab{nn}=[w b];
+                            try
+                                wr = obj.weightRecord{epoch};
+                                jer = obj.jeRecord{epoch};
+                                jjr = obj.jjRecord{epoch};
+                                wr2 = obj.weightRecord2{epoch};
                                 
-                                b = wr2(matlablayerbiasinds{nn});
-                                w = wr2(matlablayerweightinds{nn});
-                                w = reshape( w, dim_out,dim_in);
-                                Weightsmatlab2{nn}=[w b];                                
+                                Weightsmatlab = cell(1,obj.nbrofLayers);
+                                Weightsmatlab2 = cell(1,obj.nbrofLayers);
+                                matlablayersinds = []; layersinds = [];
+                                for nn=1:obj.nbrofLayers
+                                    dim_out = obj.nbrofUnits(2,nn);
+                                    dim_in = obj.nbrofUnits(1,nn)-1;
+                                    
+                                    b = wr(matlablayerbiasinds{nn});
+                                    w = wr(matlablayerweightinds{nn});
+                                    w = reshape( w, dim_out,dim_in);
+                                    Weightsmatlab{nn}=[w b];
+                                    
+                                    b = wr2(matlablayerbiasinds{nn});
+                                    w = wr2(matlablayerweightinds{nn});
+                                    w = reshape( w, dim_out,dim_in);
+                                    Weightsmatlab2{nn}=[w b];
+                                    
+                                    jeb = jer(matlablayerbiasinds{nn});
+                                    jew=jer(matlablayerweightinds{nn});
+                                    
+                                    % compare with existing
+                                    fprintf('layer%d cnet weights\n',nn);
+                                    obj.Weights{nn}
+                                    fprintf('layer%d net weights\n',nn);
+                                    Weightsmatlab{nn}
+                                    fprintf('layer%d net weights2 (after update)\n',nn);
+                                    Weightsmatlab2{nn}
+                                    
+                                    fprintf('layer%d [jew jace]\n',nn);
+                                    [jew jace(layerweightinds{nn})]
+                                    fprintf('layer%d [jeb jace]\n',nn);
+                                    [jeb jace(layerbiasinds{nn})]
+                                    
+                                    matlablayersinds = [ matlablayersinds matlablayerweightinds{nn} matlablayerbiasinds{nn}];
+                                    layersinds = [ layersinds layerweightinds{nn} layerbiasinds{nn}];
+                                end
                                 
-                                jeb = jer(matlablayerbiasinds{nn});                              
-                                jew=jer(matlablayerweightinds{nn});                               
+                                % convert from matlab's indexing to WbWb
+                                % and compare each element
+                                jjrtocompare = zeros(size(jjr));
+                                for ll = 1:totalnbrofParameters
+                                    for mm = ll:totalnbrofParameters
+                                        jjrtocompare(ll,mm) = jjr(matlablayersinds(ll),matlablayersinds(mm));
+                                        jjrtocompare(mm,ll) = jjr(matlablayersinds(mm),matlablayersinds(ll));
+                                    end
+                                end
+                                jertocompare = jer(matlablayersinds);
+                                fprintf('Jacobian * error\n');
+                                jace./jertocompare
                                 
-                                % compare with existing
-                                fprintf('nn%d cnet weights\n',nn);
-                                obj.Weights{nn}
-                                fprintf('nn%d net weights\n',nn);
-                                Weightsmatlab{nn}    
-                                fprintf('nn%d net weights2\n',nn);
-                                Weightsmatlab2{nn}    
+                                jjrtocompare = zeros(size(jjr));
+                                for ll = 1:totalnbrofParameters
+                                    for mm = ll:totalnbrofParameters
+                                        jjrtocompare(ll,mm) = jjr(matlablayersinds(ll),matlablayersinds(mm));
+                                        jjrtocompare(mm,ll) = jjr(matlablayersinds(mm),matlablayersinds(ll));
+                                    end
+                                end
+                                jertocompare = jer(matlablayersinds);                                
+                                fprintf('Hessian\n');
+                                Hessian./jjrtocompare
+                                                                
+                                somescalar = mean(jace./jertocompare);                                
+                                somescalar2 = mean(Hessian(:)./jjrtocompare(:))
+                                                                
+                                norm(jace/somescalar - jertocompare)                                
+                                norm(Hessian/somescalar2 - jjrtocompare)
+                                                                
+                                dW1 = (Hessian + 1e-3 * eye(totalnbrofParameters))\jace;
+                                dW1s = (Hessian/somescalar2+ 1e-3 * eye(totalnbrofParameters))\(jace/somescalar);
+                                                                
+                                % QR decomposition approach
+                                Jact = [Jac sqrt(1e-3)*eye(totalnbrofParameters)]';                     
+                                R1 = triu(qr(Jact));
+                                dW1qr = R1\(R1'\jace);                                
                                 
-                                fprintf('nn%d [jew jace]\n',nn);                              
-                                [jew jace(layerweightinds{nn})]
-                                fprintf('nn%d [jeb jace]\n',nn);                              
-                                [jeb jace(layerbiasinds{nn})];                                
-                            end                            
-                            jace./jer
-                            Hessian./jjr                                                      
+                                % iterate to get better - fails for now...
+                                A = (Jact'*Jact);
+                                r = jace - A*dW1qr;
+                                e = R1\(R1'\( A*r));
+                                dW1qrit = dW1qr + e;                                
+                                
+                                dW2 = (jjrtocompare + 1e-3 * eye(totalnbrofParameters))\jertocompare;
+                                
+                                disp('no scaling d(cnet - matlab)');
+                                norm(dW1 - dW2)
+                                disp('scaled d(cnet - matlab)');                                
+                                norm(dW1s - dW2)
+                                disp('scaled d(cnet qr - matlab)');                                                                
+                                norm(dW1qr - dW2)                                
+                                
+                                disp('scaled d(cnet qr  iteration - matlab)');                                                                
+                                norm(dW1qrit - dW2)                                
+                                
+                            catch
+                                Jac
+                                Hessian
+                            end
                             keyboard;
                         end
                         %--------------------------------------------------
@@ -1086,7 +1188,7 @@ classdef complexnet < handle
                         trn = out(:,batchtrain);
                         msetrn = inf; numstep = 1;
                         ee = eye(size(Hessian));
-                        while msetrn>msecurr && mu<obj.mu_max                            
+                        while (msetrn>msecurr) && (mu<obj.mu_max)                            
                             % Levenberg Marquardt                            
                             %Hblend = Hessian + mu*ee*(1  + 1i*any(imag(Hessian(:))));
                             Hblend = Hessian + mu*ee;
@@ -1100,8 +1202,13 @@ classdef complexnet < handle
                             %----------------------------------------------
                             % Blended Newton / Gradient 
                             % (i.e. LevenBerg-Marquardt)
-                            WbWb = Hblend\jace;       
-                            
+                            %WbWb = Hblend\jace;
+
+                            % use qr decomposition instead of Hessian which
+                            % is obtained by squaring
+                            Jact = [Jac sqrt(mu)*eye(totalnbrofParameters)]';
+                            R1 = triu(qr(Jact));
+                            WbWb = R1\(R1'\jace);                               
                             %----------------------------------------------                            
                                                         
                             % convert vector to Weights
@@ -1134,17 +1241,21 @@ classdef complexnet < handle
                                 end
                             else
                                 % as mu decreases, becomes Newton's method
-                                mu=mu*obj.mu_dec;                                    
+                                mu = max(mu * obj.mu_dec,1e-20);
                             end
                         end                                                
                        
                         %{
                         % switch to slow gradient at the end
                         if mu>=obj.mu_max
-                            obj.trainFcn = 'Adadelta'; mu=0;
-                        end                        
+                            newtrainFcn = 'Adadelta';
+                            warning('Switching from %s to %s\n',obj.trainFcn);
+                            obj.trainFcn = newtrainFcn;
+                            mu=0;
+                        end 
                         %}
 
+                        
                     otherwise
                         thegradientfunction = str2func(obj.trainFcn);
                         for nn=1:obj.nbrofLayers
@@ -1184,15 +1295,17 @@ classdef complexnet < handle
                     if msevl > msevalidate(epoch-1) + eps
                         testfail = testfail + 1;   % count fail to decrease
                     else
-                        testfail = 0;              % reset to zero
+                        % reset to zero, allowing for up down fluctuation
+                        % primarily at the beginning of training
+                        testfail = 0;              
                     end
                 end          
                 
                 epochtime = toc(tstart);
                                 
                 if printthisepoch
-                    fprintf('mse(%d) train msecurr %f msetrn %f msetest %f\n',...
-                        epoch,(msecurr),(msetrn),(msetst));
+                    fprintf('epoch %d: msetrain %f msetest %f msevalidate %f\n',...
+                        epoch,(msetrn),(msetst),(msevl));
                 end                                
                 
                 kt.epoch = (epoch < obj.nbrofEpochs);
@@ -1205,8 +1318,8 @@ classdef complexnet < handle
                 
             end % while keeptraining
             
-            fprintf('time to train %0.3f sec, mse(%d) train curr %f new %f test %f\n',...
-                epochtime,epoch,(msecurr),(msetrn),(msetst));
+            fprintf('time to train %0.3f sec, exit epoch %d: msetrain %f msetest %f msevalidate %f\n\n',...
+                epochtime,epoch,(msetrn),(msetst),(msevl));
             fprintf('keeptraining flags (0 = exit condition reached):\n');
             disp(kt);
             
@@ -1215,7 +1328,10 @@ classdef complexnet < handle
                 semilogy(msetrain(1:epoch),'.-'); hold on;
                 semilogy(msetest(1:epoch),'+-');
                 semilogy(msevalidate(1:epoch),'o-');
-                legend('train','test','validate');
+                legend('train (for determining weights)',...
+                    'test (for reporting performance)',...
+                    'validate (exit on 6 consequetive increases)');
+                grid minor;
             end            
             
         end
