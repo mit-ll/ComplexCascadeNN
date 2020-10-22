@@ -2,8 +2,7 @@ classdef complexnet < handle
     % complexnet Feed-forward neural network with variety of
     % backpropagation approaches
     %
-    % Swaroop Appadwedula Gr.64 
-    % August 13,2020 in the time of COVID
+    % Swaroop Appadwedula Gr.64     % August 13,2020 in the time of COVID
     
     properties
         hiddenSize   % vector of hidden layer sizes, not including output
@@ -677,6 +676,9 @@ classdef complexnet < handle
             
             if obj.domap
                 % per feature normalization into -1 1
+                % y = (ymax-ymin)*(x-xmin)/(xmax-xmin) + ymin
+                % y = ymin + gain * (x - xmin)
+                % dx_dy = 1/gain
                 [in_normalized,obj.inputSettings] = mapminmax(obj.realify(in));
 
                 %warning('setting real and imag input gain to be same');
@@ -695,6 +697,10 @@ classdef complexnet < handle
                 
                 in_normalized = obj.unrealify(in_normalized);
                 out_normalized = obj.unrealify(out_normalized);                
+                                
+                derivative_outputmap = mapminmax('dx_dy',obj.realify(out(:,1)),obj.realify(out_normalized(:,1)),obj.outputSettings);
+                derivative_outputmap = cell2mat(derivative_outputmap);
+                
             else
                 % use gain only map
                 %obj.inputSettings.gain = 1./max(abs(in),[],2);
@@ -707,6 +713,8 @@ classdef complexnet < handle
                 obj.outputSettings.gain = ones(2*size(out,1),1);                
                 in_normalized=in;
                 out_normalized=out;
+                
+                derivative_outputmap = diag(1./obj.outputSettings.gain);
             end
             
             [nbrofInUnits, nbrofSamples] = size(in);
@@ -935,90 +943,64 @@ classdef complexnet < handle
                     if nn==obj.nbrofLayers
                         % for output layer, using mean-squared error
                         % w = w - mu (y-d) f'(net*) x*                        
-                        if splitrealimag(nn)
-                            deltax{nn} = real(curr_normalized - trn_normalized) .* yprime{nn}.real + ...
-                                1i*imag(curr_normalized - trn_normalized) .* yprime{nn}.imag;         
 
-                            % have to include the 1/gain on the output
-                            % since mse is computed there
-                            % @todo: a better way is to make a ouput
-                            % weighting node
-                            aa = bsxfun(@rdivide, real(curr - trn), obj.outputSettings.gain(1:end/2));
-                            bb = bsxfun(@rdivide, imag(curr - trn), obj.outputSettings.gain(end/2+1:end));                            
-                            deltax{nn} = aa .* yprime{nn}.real + 1i* bb.* yprime{nn}.imag;         
-                                                        
-                            deltaf{nn} = yprime{nn}.real + 1i* yprime{nn}.imag;                            
-                        else
-                            deltax{nn} = (curr_normalized - trn_normalized) .* conj( yprime{nn} );
-                            
-                            % have to include the 1/gain on the output
-                            % since mse is computed there
-                            % @todo: a better way is to make a ouput
-                            % weighting node
-                            aa = bsxfun(@rdivide, real(curr - trn), obj.outputSettings.gain(1:end/2));
-                            bb = bsxfun(@rdivide, imag(curr - trn), obj.outputSettings.gain(end/2+1:end));                            
-                            deltax{nn} = (aa + 1i* bb) .* conj( yprime{nn} );
-                            
-                            deltaf{nn} = conj( yprime{nn} );
-                        end                        
-                    else 
+                        % have to include the dx/dy = 1/gain on the output
+                        % since mse is computed there
+                        % @todo: a better way is to make a constant output weighting node
+                        err_times_outputmap_derivative = obj.unrealify(derivative_outputmap * obj.realify(curr-trn));
                         
+                        if splitrealimag(nn)                            
+                            deltax{nn} = real(err_times_outputmap_derivative) .* yprime{nn}.real + ...
+                                1i* imag(err_times_outputmap_derivative).* yprime{nn}.imag;                                                        
+                            deltaf{nn} = yprime{nn}.real + 1i* yprime{nn}.imag;                            
+                        else                            
+                            deltax{nn} = err_times_outputmap_derivative .* conj( yprime{nn} );                            
+                            deltaf{nn} = conj( yprime{nn} );         
+                            
+                            % trying out split re/im even though it's not
+                            % correct
+                            %
+                            %deltax{nn} = real(err_times_outputmap_derivative) .* real( yprime{nn} ) + ...
+                            %    1i* imag(err_times_outputmap_derivative).* imag( yprime{nn} );                                                        
+                            %deltaf{nn} = real( yprime{nn} ) + 1i* imag( yprime{nn} );                            
+                        end                        
+                    else                         
                         dx_nnplus1 = deltax{nn+1}; % =0, assigned just for dimensions
-                        dx_nn = deltax{nn};                        
                         yp_nn = yprime{nn};
                         W_nnplus1 = obj.Weights{nn+1};
+                        df_nnplus1 = deltaf{nn+1}; % =0, assigned just for dimensions
                         
-                        df_nnplus1 = deltaf{nn+1}; % =0, assigned just for dimensions                        
-                        df_nn = deltaf{nn};                               
-                        parfor mm=1:nbrofSamplesinBatch                            
-                            % last column of weight has no effect of dc/x{nn}
-                            % since it is due to bias (hence the 1:end-1)
-                            % hidden layers
-                            % w_ij = w_ij + mu [sum_k( (d_k-y_k) f'(net_k*) w_ki* )]
-                            %                           *  f'(net_i*) x_j*                            
-                            if splitrealimag(nn)
-                                % for 2-layer derivation, see equation(17)
-                                % "Extension of the BackPropagation
-                                % algorithm to complex numbers" 
-                                % by Tohru Nitta                                
-                                ypr = yp_nn.real(:,mm);
-                                ypi = yp_nn.imag(:,mm);
-                                dxr_nnplus1 = real(dx_nnplus1(:,mm));
-                                dxi_nnplus1 = imag(dx_nnplus1(:,mm));                                                                                                  
-                                dx = ypr.*(real(W_nnplus1(:,1:end-1)).' * dxr_nnplus1) +...
-                                    ypr.*(imag(W_nnplus1(:,1:end-1)).' * dxi_nnplus1) +...
-                                    -1i*(...
-                                    ypi.*(imag(W_nnplus1(:,1:end-1)).' * dxr_nnplus1) +...
-                                    ypi.*(real(W_nnplus1(:,1:end-1)).' * dxi_nnplus1)...
-                                    );                                                                             
-
-                                dfr_nnplus1 = real(df_nnplus1(:,mm));
-                                dfi_nnplus1 = imag(df_nnplus1(:,mm));                                                                   
-                                df = ypr.*(real(W_nnplus1(:,1:end-1)).' * dfr_nnplus1) +...
-                                    ypr.*(imag(W_nnplus1(:,1:end-1)).' * dfi_nnplus1) +...
-                                    -1i*(...
-                                    ypi.*(imag(W_nnplus1(:,1:end-1)).' * dfr_nnplus1) +...
-                                    ypi.*(real(W_nnplus1(:,1:end-1)).' * dfi_nnplus1)...
-                                    );                       
-                            else
-                                % last column of Weights are from the bias
-                                % term for nn+1 layer, which does not
-                                % contribute to nn layer, hence 1:end-1                                
-                                dx = conj(yp_nn(:,mm)).* ( W_nnplus1(:,1:end-1).' * dx_nnplus1(:,mm));                                
-                                df = conj(yp_nn(:,mm)).* ( W_nnplus1(:,1:end-1).' * df_nnplus1(:,mm));
-                            end
+                        if splitrealimag(nn)
+                            % for 2-layer derivation, see equation(17)
+                            % "Extension of the BackPropagation
+                            % algorithm to complex numbers"
+                            % by Tohru Nitta
+                            ypr = yp_nn.real;
+                            ypi = yp_nn.imag;
+                            dxr_nnplus1 = real(dx_nnplus1);
+                            dxi_nnplus1 = imag(dx_nnplus1);
+                            deltax{nn} = ypr.* ...
+                                (  (real(W_nnplus1(:,1:end-1)).' * dxr_nnplus1) +...
+                                (imag(W_nnplus1(:,1:end-1)).' * dxi_nnplus1) ) +...
+                                -1i* ypi .* ...
+                                (  (imag(W_nnplus1(:,1:end-1)).' * dxr_nnplus1) +...
+                                   -1*(real(W_nnplus1(:,1:end-1)).' * dxi_nnplus1 ) );
                             
-                            if any(size(dx)~=size(dx_nn(:,mm)))
-                                dx
-                                dx_nn(:,mm)
-                                error('gradient dc/dx dimensions mismatch');                                
-                            end
-                            dx_nn(:,mm) = dx;
-                            df_nn(:,mm) = df;       
-
+                            dfr_nnplus1 = real(df_nnplus1);
+                            dfi_nnplus1 = imag(df_nnplus1);                            
+                            deltaf{nn} = ypr.* ...
+                                (  (real(W_nnplus1(:,1:end-1)).' * dfr_nnplus1) +...
+                                (imag(W_nnplus1(:,1:end-1)).' * dfi_nnplus1) ) +...
+                                -1i* ypi .* ...
+                                (  (imag(W_nnplus1(:,1:end-1)).' * dfr_nnplus1) +...
+                                   -1*(real(W_nnplus1(:,1:end-1)).' * dfi_nnplus1 ) );
+                        else
+                            % last column of Weights are from the bias
+                            % term for nn+1 layer, which does not
+                            % contribute to nn layer, hence 1:end-1
+                            deltax{nn} = conj(yp_nn).* ( W_nnplus1(:,1:end-1).' * dx_nnplus1);
+                            deltaf{nn} = conj(yp_nn).* ( W_nnplus1(:,1:end-1).' * df_nnplus1);
                         end
-                        deltax{nn} = dx_nn;
-                        deltaf{nn} = df_nn;
                     end % if nn=nbrofLayers, i.e. last layer
                     
                     if nn==1 
@@ -1056,7 +1038,6 @@ classdef complexnet < handle
                 %
                 switch obj.trainFcn
                     case 'trainlm'
-
                         % compute jacobian matrix
                         for nn=1:obj.nbrofLayers
                             % vectorize the layer weights and bias by
@@ -1156,16 +1137,8 @@ classdef complexnet < handle
                                 end
                                 jertocompare = jer(matlablayersinds);
                                 fprintf('Jacobian * error\n');
-                                jace./jertocompare
-                                
-                                jjrtocompare = zeros(size(jjr));
-                                for ll = 1:obj.totalnbrofParameters
-                                    for mm = ll:obj.totalnbrofParameters
-                                        jjrtocompare(ll,mm) = jjr(matlablayersinds(ll),matlablayersinds(mm));
-                                        jjrtocompare(mm,ll) = jjr(matlablayersinds(mm),matlablayersinds(ll));
-                                    end
-                                end
-                                jertocompare = jer(matlablayersinds);                                
+                                jace./jertocompare                                
+                                                            
                                 fprintf('Hessian\n');
                                 Hessian./jjrtocompare
                                                                 
@@ -1174,7 +1147,9 @@ classdef complexnet < handle
                                                                 
                                 norm(jace/somescalar - jertocompare)                                
                                 norm(Hessian/somescalar2 - jjrtocompare)
-                                                                
+                                                                                                
+                                dWmatlab = (jjrtocompare + 1e-3 * eye(obj.totalnbrofParameters))\jertocompare;
+                                
                                 dW1 = (Hessian + 1e-3 * eye(obj.totalnbrofParameters))\jace;
                                 dW1s = (Hessian/somescalar2+ 1e-3 * eye(obj.totalnbrofParameters))\(jace/somescalar);
                                                                 
@@ -1184,22 +1159,37 @@ classdef complexnet < handle
                                 dW1qr = R1\(R1'\jace);                                
                                 
                                 % iterate to get better - fails for now...
+                                A = (R1'*R1); %
                                 A = (Jact'*Jact);
                                 r = jace - A*dW1qr;
-                                e = R1\(R1'\( A*r));
+                                e = R1\(R1'\r);
                                 dW1qrit = dW1qr + e;                                
                                 
-                                dW2 = (jjrtocompare + 1e-3 * eye(obj.totalnbrofParameters))\jertocompare;
+                                % min norm approach
+                                %dW1lsq = lsqr(Jact'*Jact,jace);
+                                %norm(dW1lsq - dW2)                                  
+                                dW1lsq = lsqminnorm(Jact'*Jact,jace);
+                                
+                                % svd approach
+                                [~,S,V] = svd(Jact);
+                                svec = diag(S); svec2 = 1./(svec.*conj(svec));
+                                dW1svd = (V*diag(svec2)*V')*jace;                                
                                 
                                 disp('no scaling d(cnet - matlab)');
-                                norm(dW1 - dW2)
+                                norm(dW1 - dWmatlab)
                                 disp('scaled d(cnet - matlab)');                                
-                                norm(dW1s - dW2)
+                                norm(dW1s - dWmatlab)
                                 disp('scaled d(cnet qr - matlab)');                                                                
-                                norm(dW1qr - dW2)                                
+                                norm(dW1qr - dWmatlab)                                
                                 
                                 disp('scaled d(cnet qr  iteration - matlab)');                                                                
-                                norm(dW1qrit - dW2)                                
+                                norm(dW1qrit - dWmatlab)                                
+                                                                
+                                disp('d(cnet minnorm - matlab)');                                      
+                                norm(dW1lsq - dWmatlab)                                
+                                
+                                disp('d(cnet svd - matlab)');                                      
+                                norm(dW1svd - dWmatlab)
                                 
                             catch
                                 Jac
@@ -1227,14 +1217,22 @@ classdef complexnet < handle
                             
                             %----------------------------------------------
                             % Blended Newton / Gradient 
-                            % (i.e. LevenBerg-Marquardt)
-                            %WbWb = Hblend\jace;
-
-                            % use qr decomposition instead of Hessian which
-                            % is obtained by squaring
-                            Jact = [Jac sqrt(mu)*eye(obj.totalnbrofParameters)]';
-                            R1 = triu(qr(Jact));
-                            WbWb = R1\(R1'\jace);                               
+                            % (i.e. LevenBerg-Marquardt)                            
+                            if 0
+                                WbWb = Hblend\jace;
+                            else
+                                % use qr decomposition instead of Hessian which
+                                % is obtained by squaring
+                                Jact = [Jac sqrt(mu)*eye(obj.totalnbrofParameters)]';
+                                R1 = triu(qr(Jact));
+                                WbWb = R1\(R1'\jace);
+                                
+                                % find extra step e based on residual error r
+                                A = (Jact'*Jact);
+                                r = jace - A*WbWb;
+                                e = R1\(R1'\r);
+                                WbWb = WbWb + e;  
+                            end
                             %----------------------------------------------                            
                                                         
                             % convert vector to Weights

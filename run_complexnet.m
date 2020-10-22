@@ -38,13 +38,16 @@ xlabel('input'); ylabel('output');
 
 %% check for pure phase output function
 
-params.hiddenSize=[]; 
+params.hiddenSize=[1]; 
+params.layersFcn = 'sigrealimag2';
 params.outputFcn='purephase'; 
 net = complexnet(params);
 x=randn(1,100)+1i*randn(1,100);
 net.trainsingle(x,x./abs(x));
 net.train(x,(3+3*1i)* x./abs(x));  % does not work - can't handle scalar
 print(net);
+
+
 
 %% check for split real/imaginary tansig(i.e. sigmoid) activation
 
@@ -138,7 +141,7 @@ print(cnet)
 % ellipse
 % I
 rot = pi/3; R = [cos(rot) -sin(rot); sin(rot) cos(rot)];
-%R = diag([0.5 0.3])*R;
+R = diag([0.5 0.3])*R;
 
 ini1 = linspace(-0.9,0.9,7); inr1 = zeros(size(ini1));
 inr2 = linspace(-0.2,0.2,2); ini2 = 0.95*ones(size(inr2));
@@ -197,16 +200,16 @@ grid minor; grid;
 choice = 'simple';
 switch choice
     case 'simple'        
-        xt = randn(1,10000) + 0*1i*randn(1,10000);
+        xt = randn(1,10000) + 1i*randn(1,10000);
         L = length(xt);
         %beta = [ 0.3 + 0.7*1i, 0.7 - 0.3*1i]; lags = { [1,2] , [1,3] };
-        beta = [ 1, 0.3 + 0*0.7*1i]; 
+        beta = [ 1, 0.3 + 0.7*1i]; 
         lags = { [0], [1,2] };        
         
         numlagsnet = 6+1;
     case 'many'
         %a(t) = sqt(1-bval)*e(t) + bval*a(t-1)
-        bval = 0;0.5;
+        bval = 0.5;%0
         et = randn(1,100000) + 0*1i*randn(1,100000);
         if bval == 0
             xt = sqrt(1-bval^2)*et;
@@ -289,7 +292,7 @@ else
     params.layersFcn = 'mytansig'; %'mytanh';
 end
 params.outputFcn = 'purelin';
-params.nbrofEpochs = 100;
+params.nbrofEpochs = 1000;
 params.mu_inc = 10;
 params.mu_dec = 1/10;
 
@@ -439,7 +442,7 @@ fs = 2*(fc+bw); % (Hz) sample rate
 %---------------------------------------------
 % create a random signal with given bandwidth
 num=1e5;
-zbb = crandn(1,num);
+zbb = 10 * crandn(1,num);
 lpFilt = designfilt('lowpassfir', 'PassbandFrequency', bw/(fs/2),...
     'StopbandFrequency', bw/(fs/2)*1.1, 'PassbandRipple', 0.5, ...
     'StopbandAttenuation', 65, 'DesignMethod', 'kaiserwin');
@@ -455,7 +458,8 @@ zpass = real(zbb).*real(s) - imag(zbb).*imag(s);
 
 
 % apply a nonlinear function to zpass (e.g. clipping) -> znl
-nlChoice = 'volterra';
+nlChoice ='volterra';
+
 switch nlChoice
     case 'clip'
         clipleveldB = -3; %-20
@@ -463,7 +467,7 @@ switch nlChoice
         numlagsnet=2
     case 'volterra'
         %beta = [ 0.3 + 0.7*1i, 0.7 - 0.3*1i]; lags = { [1,2] , [1,3] };
-        beta = [ 1, 0.3 + 0*0.7*1i];
+        beta = [ 1, 0.3];
         lags = { [0], [1,2] };        
         numlagsnet = 6+1;
         [zpasst,znl,txtvt] = volterra(zpass,lags,beta);
@@ -517,7 +521,7 @@ plot(angle(zbbnl))
 % non-linear predictor
 params = [];
 params.domap = 1;
-params.hiddenSize = [16 6 ];
+params.hiddenSize = [16 6 ]/2;
 %params.hiddenSize = [16 6 ]*16;  % wrks for ~7k weights
 params.debugPlots=0;
 params.mu = 1e-3;
@@ -632,19 +636,14 @@ grid minor; grid;
 %boldify;
 
 
-
-
-
-fprintf('mse outhat1 %f outri1 %f outlinear1 %f\n',...
+fprintf('mse outhat1 %f outri1 %f \n',...
     mean(abs(out1(:)-outhat1(:)).^2), ...
-    mean(abs(out1(:)-outri1(:)).^2), ...
-    mean(abs(out1(:)-outlinear1(:)).^2));
+    mean(abs(out1(:)-outri1(:)).^2));
 
 xtinds = xt(testinds);
-fprintf('mse (less xt) outhat1 %f outri1 %f outlinear1 %f\n',...
+fprintf('mse (less xt) outhat1 %f outri1 %f \n',...
     mean(abs(out1(:)-xtinds(:)-outhat1(:)).^2), ...
-    mean(abs(out1(:)-xtinds(:)-outri1(:)).^2), ...
-    mean(abs(out1(:)-xtinds(:)-outlinear1(:)).^2));
+    mean(abs(out1(:)-xtinds(:)-outri1(:)).^2));
 
 %% example 12.5 from neural network design 
 % for checking Jacobian calculation
