@@ -143,8 +143,9 @@ print(cnet)
 rot = pi/3; R = [cos(rot) -sin(rot); sin(rot) cos(rot)];
 R = diag([0.5 0.3])*R;
 
-ini1 = linspace(-0.9,0.9,7); inr1 = zeros(size(ini1));
-inr2 = linspace(-0.2,0.2,2); ini2 = 0.95*ones(size(inr2));
+num = 2;
+ini1 = linspace(-0.945,0.945,7*num); inr1 = zeros(size(ini1));
+inr2 = linspace(-0.2,0.2,2*num); ini2 = 0.95*ones(size(inr2));
 inr3 = inr2; ini3=-ini2;
 shapeI=[inr1 inr2 inr3] + 1i*[ini1 ini2 ini3];
 
@@ -160,7 +161,7 @@ shapeOrotated = y(1,:) + 1i*y(2,:);
 
 params = [];
 params.nbrofEpochs=200;
-params.hiddenSize=[1 2 1];
+params.hiddenSize=[1 2 2];
 params.domap=0;
 params.layersFcn='sigrealimag2'; params.outputFcn='purelin';
 % this example prefers crandn to nguyen-widrow, why?
@@ -278,15 +279,15 @@ outlinear1 = net.test(inpast1);
 % non-linear predictor
 params = [];
 params.domap = 1;
-params.hiddenSize = [16 6 4];
-%params.hiddenSize = [16 6 ]*16;  % wrks for ~7k weights
+%params.hiddenSize = [16 6 4];
+params.hiddenSize = [16 6 4];  % wrks for ~7k weights
 params.debugPlots=0;
 params.mu = 1e-3;
 params.trainFcn = 'trainlm'; params.minbatchsize = round(numel(traininds)*0.7);
 params.batchtype='fixed';
 if any(imag(inpast(:)))
-    params.initFcn = 'c-nguyen-widrow';
-    params.layersFcn = 'sigrealimag2';'cartrelu';'satlins';
+    params.initFcn = 'crandn'; 'c-nguyen-widrow';
+    params.layersFcn = 'sigrealimag2';'cartrelu';'satlins'; 
 else
     params.initFcn = 'nguyen-widrow';'randn';
     params.layersFcn = 'mytansig'; %'mytanh';
@@ -442,19 +443,19 @@ fs = 2*(fc+bw); % (Hz) sample rate
 %---------------------------------------------
 % create a random signal with given bandwidth
 num=1e5;
-zbb = 10 * crandn(1,num);
+ibb = 10 * crandn(1,num);
 lpFilt = designfilt('lowpassfir', 'PassbandFrequency', bw/(fs/2),...
     'StopbandFrequency', bw/(fs/2)*1.1, 'PassbandRipple', 0.5, ...
     'StopbandAttenuation', 65, 'DesignMethod', 'kaiserwin');
 [Gd,w] = grpdelay(lpFilt);
-zbb=filter(lpFilt,zbb);
-zbb=zbb(Gd(1):end);
+ibb=filter(lpFilt,ibb);
+ibb=ibb(Gd(1):end);
 %---------------------------------------------
 
 
 % modulate to passband fc
-tvec = (0:length(zbb)-1)/fs; s = exp(1i*2*pi*fc*tvec);
-zpass = real(zbb).*real(s) - imag(zbb).*imag(s);
+tvec = (0:length(ibb)-1)/fs; s = exp(1i*2*pi*fc*tvec);
+zpass = real(ibb).*real(s) - imag(ibb).*imag(s);
 
 
 % apply a nonlinear function to zpass (e.g. clipping) -> znl
@@ -500,12 +501,12 @@ inpast1 = ytt(2:end,testinds);
 
 figure(131);clf;
 subplot(211); 
-plot(real(zbb),'.'); hold on;
+plot(real(ibb),'.'); hold on;
 plot(real(zbbrx),'.');
 plot(real(zbbnl),'.');
 
 subplot(212); 
-plot(imag(zbb),'.'); hold on;
+plot(imag(ibb),'.'); hold on;
 plot(imag(zbbrx),'.');
 plot(imag(zbbnl),'.');
 
@@ -528,8 +529,8 @@ params.mu = 1e-3;
 params.trainFcn = 'trainlm'; params.minbatchsize = round(numel(traininds)*0.7);
 params.batchtype='fixed';
 if any(imag(inpast(:)))
-    params.initFcn = 'c-nguyen-widrow';
-    params.layersFcn = 'sigrealimag2';'cartrelu';'satlins';
+    params.initFcn = 'crandn'; 'c-nguyen-widrow';
+    params.layersFcn = 'satlins';'sigrealimag2';'cartrelu';
 else
     params.initFcn = 'nguyen-widrow';'randn';
     params.layersFcn = 'mytansig'; %'mytanh';
@@ -640,10 +641,6 @@ fprintf('mse outhat1 %f outri1 %f \n',...
     mean(abs(out1(:)-outhat1(:)).^2), ...
     mean(abs(out1(:)-outri1(:)).^2));
 
-xtinds = xt(testinds);
-fprintf('mse (less xt) outhat1 %f outri1 %f \n',...
-    mean(abs(out1(:)-xtinds(:)-outhat1(:)).^2), ...
-    mean(abs(out1(:)-xtinds(:)-outri1(:)).^2));
 
 %% example 12.5 from neural network design 
 % for checking Jacobian calculation
@@ -679,6 +676,209 @@ cnet.train(in,out)
 %     4     8
 %     1     4
 %     1     1
+
+
+%% example of signal + clipped interference
+
+% random noise interference
+crandn = @(m,n) complex(randn(m,n),randn(m,n))/sqrt(2);
+
+% some clipping nonlinearties for real passband input
+clipfn = @(x,a) ( x.*(abs(x)<=a) + a*sign(x).*(abs(x)>a));
+clip1fn = @(x) x./abs(x);
+clip2fn = @(x) ( real(x).*(real(x)<=1) + real(x)>1 ) + ...
+    1i* ( imag(x).*(imag(x)<=1) + imag(x)>1 );
+
+bw = 1e6;
+fc = 1e9;  % (Hz) center frequency
+fs = 2*(fc+bw); % (Hz) sample rate
+
+%---------------------------------------------
+% create a random signal with given bandwidth
+num=1e7;
+JtoSdB = 0;
+ibb = 10^(JtoSdB/10) * crandn(1,num);
+lpFilt = designfilt('lowpassfir', 'PassbandFrequency', bw/(fs/2),...
+    'StopbandFrequency', bw/(fs/2)*1.1, 'PassbandRipple', 0.5, ...
+    'StopbandAttenuation', 65, 'DesignMethod', 'kaiserwin');
+[Gd,w] = grpdelay(lpFilt);
+ibb=filter(lpFilt,ibb);
+ibb=ibb(Gd(1):end);
+
+sbb = 1 * crandn(1,num);
+sbb=filter(lpFilt,sbb);
+sbb=sbb(Gd(1):end);
+%---------------------------------------------
+
+% modulate to passband fc
+tvec = (0:length(ibb)-1)/fs; 
+s = exp(1i*2*pi*fc*tvec);
+ipass = real(ibb).*real(s) - imag(ibb).*imag(s);
+spass = real(sbb).*real(s) - imag(sbb).*imag(s);
+zpass = ipass + spass;
+
+% apply a nonlinear function to zpass (e.g. clipping) -> znl
+nlChoice ='volterra';'clip';'volterra';
+
+switch nlChoice
+    case 'clip'
+        clipleveldB = -3; %-20
+        znl = clipfn(zpass, 10^(clipleveldB/10) * median(abs(zpass))/sqrt(2));
+        numlagsnet=2
+    case 'volterra'
+        %beta = [ 0.3 + 0.7*1i, 0.7 - 0.3*1i]; lags = { [1,2] , [1,3] };
+        beta = [ 1, 0.3];
+        lags = { [0], [1,2] };        
+        numlagsnet = 6+1;
+        [zpasst,znl,txtvt] = volterra(zpass,lags,beta);
+end
+
+zbbnl = znl.*real(s) - 1i*znl.*imag(s);
+zbbnl = filter(lpFilt,zbbnl); 
+zbbnl = 2*zbbnl(Gd(1):end);
+
+%zbbrx = ibb + sbb
+zbbrx = zpass.*real(s) - 1i*zpass.*imag(s);
+zbbrx = filter(lpFilt,zbbrx); 
+zbbrx = 2*zbbrx(Gd(1):end);
+
+ibb = ipass.*real(s) - 1i*ipass.*imag(s);
+ibb = filter(lpFilt,ibb); 
+ibb = 2*ibb(Gd(1):end);
+
+sbb = spass.*real(s) - 1i*spass.*imag(s);
+sbb = filter(lpFilt,sbb); 
+sbb = 2*sbb(Gd(1):end);
+
+% input is the interference signal, output is f(interference + signal)
+% see if network output - f(interference + signal) = sbb desired
+[P,Q] = rat( 4*bw / fs);
+xt = resample(ibb, P,Q);
+yt = resample(zbbnl, P, Q);
+st = resample(sbb, P,Q);
+
+% setup the samples available for prediction (up to numlags delays)
+L = length(yt);
+ytt = zeros(numlagsnet,L);
+for ll=0:numlagsnet-1
+    ytt(ll+1, ll + (1:L-ll) ) = yt(1:L-ll);
+end
+
+% setup the samples available for prediction (up to numlags delays)
+L = length(xt);
+xtt = zeros(numlagsnet,L);
+for ll=0:numlagsnet-1
+    xtt(ll+1, ll + (1:L-ll) ) = xt(1:L-ll);
+end
+
+traininds = 1:L; 
+out = yt(traininds);
+
+%disp('using current sample');
+inpast = xtt(1:end,traininds);
+
+
+% non-linear predictor
+params = [];
+params.domap = 1;
+params.hiddenSize = [4 2];
+params.hiddenSize = [4 2 1];
+%params.hiddenSize = [16 6 ]*16;  % wrks for ~7k weights
+params.debugPlots=0;
+params.mu = 1e-3;
+params.trainFcn = 'trainlm'; params.minbatchsize = round(numel(traininds)*0.7);
+params.batchtype='fixed';
+if any(imag(inpast(:))) 
+    params.initFcn = 'crandn'; % do not use 'c-nguyen-widrow';
+    params.layersFcn = 'satlins';'sigrealimag2';'cartrelu';'satlins';
+else
+    params.initFcn = 'nguyen-widrow';'randn';
+    params.layersFcn = 'mytansig'; %'mytanh';
+end
+params.outputFcn = 'purelin';
+params.nbrofEpochs = 2000;
+params.mu_inc = 10;
+params.mu_dec = 1/10;
+
+txtml = sprintf('complex ML activation:%s layers:[%s]',...
+    params.layersFcn,num2str(params.hiddenSize));
+
+if 1
+    cnet = complexnet(params);
+    cnet = cnet.train(inpast,out);
+    outhat = cnet.test(inpast);
+    
+    %cnet = cnet.train(inpast(:,1000+(1:1000)),st(1000+(1:1000)));
+    %load tmp
+    %cnet.initFcn = 'previous';
+    %cnet = cnet.train(inpast(:,1000+(1:100)),out(1000+(1:100))+st(1000+(1:100)));
+    %outhat = cnet.test(inpast);
+else
+    params.initFcn = 'nguyen-widrow'
+    params.layersFcn = 'mytansig'
+    cnet = complexnet(params);
+    cnet = cnet.train(realifyfn(inpast),realifyfn(out));
+    outhat = cnet.test(realifyfn(inpast)); outhat = outhat(1:end/2,:) + 1i * outhat(end/2+1:end,:);
+end
+
+% matlab predictor
+net = feedforwardnet( 2 * params.hiddenSize );
+if any(imag(inpast(:)))       
+    net = configure(net,realifyfn(inpast),realifyfn(out));
+    net.initFcn = 'initlay';
+    [dim1,dim2] = size(net.inputWeights);
+    for ii= 1:dim1
+        for jj=1:dim2
+            net.inputWeights{ii,jj}.initFcn = 'rands';
+        end
+    end
+    [dim1,dim2] = size(net.inputWeights);
+    for ii= 1:dim1
+        for jj=1:dim2
+            net.layerWeights{ii,jj}.initFcn = 'rands';
+        end
+    end
+    [dim1] = length(net.biases);
+    for ii=1:dim1, net.biases{ii}.initFcn = 'rands'; end
+    net = init(net);
+    
+    for ii=1:length(net.layers)
+        net.layers{ii}.transferFcn='satlins';
+    end
+
+    net = train(net,realifyfn(inpast),realifyfn(out));
+    outri = net(realifyfn(inpast)); outri = outri(1:end/2,:) + 1i * outri(end/2+1:end,:);
+else
+    net = train(net,inpast,out);
+    outri = net(inpast);
+end
+
+figure(1233); clf;
+subplot(211)
+plot(-real(st),'g.-','MarkerSize',20); hold on;
+plot(real(outhat-out),'r.-');
+plot(real(outri-out),'k.-')
+ylim(max(abs(real(st)))*[-2 2]);
+xlim([1 100]);
+title(sprintf('recovering s(t) from volterra( s(t) + i(t) ) J/S=%0.1fdB using split re/im tansig 8-4-2 nets',JtoSdB));
+legend('random N(0,1) signal','complex network mse=237e-4','re/im network mse=11e-4')
+xlabel('samples');
+ylabel('real part');
+grid minor;
+
+subplot(212)
+plot(-imag(st),'g.-','MarkerSize',20); hold on;
+plot(imag(outhat-out),'r.-');
+plot(imag(outri-out),'k.-')
+xlim([1 100]);
+ylim(max(abs(imag(st)))*[-2 2]);
+xlabel('samples');
+ylabel('imag part');
+grid minor;
+
+
+
+
 
 
 
