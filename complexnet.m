@@ -24,6 +24,16 @@ classdef complexnet < handle
         % keep weights as a vector
         WeightsHistory         % history of weights
         WeightsCircularBuffer  % circular buffer of last max_fail weights
+        
+        
+        
+        cascadeWeights 
+        cascadeWeightsHistory         % history of weights
+        cascadeWeightsCircularBuffer  % circular buffer of last max_fail weights
+        
+        
+        
+        
 
         trainFcn     % see options in gradient_descent directory
                      % Hessian-based 'trainlm'=Levenberg-Marquardt
@@ -84,9 +94,11 @@ classdef complexnet < handle
         domapdefault = 'complex'  % mapminmax( complex ) instead of re/im
         
         % some stopping parameters
-        maxtime = 60*200;    % (s) compared to tic/toc
+        %maxtime = 60*200;    % (s) compared to tic/toc
+        maxtime = Inf;        % (s) let epochs determine stopping        
+        
         msedesired = 0;
-        min_grad = 1e-7 / 100; % matlab sets to 1e-7, set lower due to complex
+        min_grad = 1e-7 / 10; % matlab sets to 1e-7, set lower due to complex
                              % @todo: unclear where this number comes from
         max_fail = 6;        % allow max_fail steps of increase in 
                              % validation data before stopping 
@@ -163,9 +175,17 @@ classdef complexnet < handle
             z = zr + 1i * zi;
             
             % assume that derivative is 1 when either is linear
+            % @todo: should this be treated as split re/im or not            
+            
+            % treating as split re/im
             [dz.real,dz.imag] = deal(zeros(size(z)));
             dz.real(~indsr) = 1;
-            dz.imag(~indsi) = 1;                        
+            dz.imag(~indsi) = 1;  
+            
+            % treating as a complex function does not work!
+            %dz = zeros(size(z));
+            %dz(~indsr) = 1;            
+            %dz(~indsi) = dz(~indsi) + 1i;            
         end        
 
         % two sided sigmoidal        
@@ -332,7 +352,12 @@ classdef complexnet < handle
             % map to [-1 1] if specifically requested
             % otherwise, no mapping if linear
             %@todo: this should be done based on ranges of the functions
-            pp = strcmp(params.layersFcn,'purelin');
+            if iscell(params.layersFcn)
+                lFcn = params.layersFcn{1};
+            else
+                lFcn = params.layersFcn;
+            end
+            pp = strcmp(lFcn,'purelin');
             if isfield(params,'domap') 
                 obj.domap=params.domap; 
                 if pp==1 && ~obj.domap==0, warning('mapping to [-1 1] used even though layers are linear'); end
@@ -376,7 +401,7 @@ classdef complexnet < handle
             % hidden layers
             for ll=1:length(obj.layers)-1
                 if iscell(layersFcn)
-                    if numel(layersFcn)==length(obj.layers)
+                    if numel(layersFcn)==length(obj.layers)-1
                         obj.layers{ll}.transferFcn = layersFcn{ll};
                     end
                 elseif char(layersFcn)
@@ -523,7 +548,9 @@ classdef complexnet < handle
    
             % include bias vector for first layer
             % bias can be real since weights are complex
-            biasvec = ones(1,size(in,2));
+            % fyi: can zero out the bias by changing 1* to 0*
+            biasvec = 1*ones(1,size(in,2));
+            
             y0 = [in; biasvec];
 
             % used for derivative, but unnecessary since the corresponding
@@ -542,7 +569,7 @@ classdef complexnet < handle
                 
                 % apply matrix of weights
                 x{nn} = W*ynnminus1;     % x{n} = W{n}y{n-1}
-                
+                                
                 % evaluate f(xn) and f'(xn)
                 [y{nn},yprime{nn}] = activationfn(x{nn});
                 
@@ -1279,9 +1306,10 @@ classdef complexnet < handle
                         subplot(obj.nbrofLayers,1,nn)
                         imagesc(real(DeltaW{nn})); colorbar;
                     end
-                    gradientacc = sqrt( sum(abs(DeltaW{nn}(:)).^2) );
+                    gradientacc = gradientacc + sum(abs(DeltaW{nn}(:)).^2);
                 end
-                  
+                gradientacc = sqrt( gradientacc );  
+                
                 %for linear single neuron, no output mapping
                 % DeltaW = err_times_outputmap_derivative .* conj( yprime{nn} ) * ynnminus1'/nbrofSamplesinBatch;      
                 % Jac = conj( yprime{nn} ) * conj(ynnminus1(1:end-1,mm)));
@@ -1497,15 +1525,20 @@ classdef complexnet < handle
                 keeptraining = all( struct2array(kt) );
                 
             end % while keeptraining
-            
-            if kt.fail==0
+
+            if epoch>obj.max_fail
+                if kt.fail==0
+                    ind = 1;
+                else
+                    [msevl,ind] = min( msevalidate(epoch-obj.max_fail:epoch) );
+                end
                 fprintf('Scrolling back weights by %d epochs to best at epoch %d\n',...
-                    obj.max_fail,epoch-obj.max_fail); 
-                WbWb = obj.WeightsCircularBuffer(:,1);
+                    (obj.max_fail - ind + 1), epoch - obj.max_fail + ind-1);
+                WbWb = obj.WeightsCircularBuffer(:,ind);  %max_fail + 1 buffer
                 obj.Weights = vec_to_Weights(obj,WbWb);
-                msetrn = msetrain(epoch-obj.max_fail);
-                msetst = msetest(epoch-obj.max_fail);
-                msevl = msevalidate(epoch-obj.max_fail);
+                msetrn = msetrain(epoch-obj.max_fail + ind-1);
+                msetst = msetest(epoch-obj.max_fail + ind-1);
+                msevl = msevalidate(epoch-obj.max_fail + ind-1);
             end
             
             fprintf('time to train %0.3f sec, exit epoch %d: msetrain %f msetest %f msevalidate %f\n\n',...
