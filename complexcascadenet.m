@@ -1039,58 +1039,60 @@ classdef complexcascadenet < handle
                             sensitivity{layer} = err_times_outputmap_derivative .* conj( fdot{layer} );                            
                             sensitivityf{layer} = conj( fdot{layer} );         
                         end                        
-                    else                        
-                        fdotlayer = fdot{layer};
-                        sensitivity{layer} = 0;  % should assign actual dimensions
-                        sensitivityf{layer} = 0;
-                        
-                        % @todo: can factor out the fdot from the for loop
-                        % as in fdot  * sum{ sensitivity{tolayer}*W }
+                    else                                                
+                        % factor out the fdot from the for loop
+                        % as in fdot  * sum{ sensitivity{tolayer}*W }   
+                        %                \-----LW_sensitivity-------/                        
+                        if splitrealimag(layer)
+                            LW_sensitivity.real = 0;LW_sensitivity.imag = 0;
+                            LW_sensitivityf.real = 0;LW_sensitivityf.imag = 0;
+                        else
+                            LW_sensitivity = 0;
+                            LW_sensitivityf = 0;
+                        end                        
                         for tolayer = layer+1:obj.nbrofLayers                            
-                            LWtolayer = obj.LayerWeights{tolayer,layer};          
-                            
-                            % no layer weight, so no contribution
-                            if isempty(LWtolayer), continue; end
-                            
-                            % in backprop, sensitivity of to layer 
-                            stolayer = sensitivity{tolayer}; 
-                            sftolayer = sensitivityf{tolayer}; 
-                        
-                            if splitrealimag(layer)
-                                % for 2-layer derivation, see equation(17)
-                                % "Extension of the BackPropagation
-                                % algorithm to complex numbers" by Tohru Nitta
-                                fdotreal = fdotlayer.real;
-                                fdotimag = fdotlayer.imag;
-                                stolayerreal = real(stolayer);
-                                stolayerimag = imag(stolayer);
+                            LWtolayer = obj.LayerWeights{tolayer,layer};                                      
+                            % if no layer weight, no contribution
+                            if ~isempty(LWtolayer)                                
+                                % in backprop, sensitivity to layer
+                                stolayer = sensitivity{tolayer};
+                                sftolayer = sensitivityf{tolayer};
                                 
-                                sensitivity{layer} = sensitivity{layer} + ...
-                                    fdotreal.* ...
-                                    (  (real(LWtolayer).' * stolayerreal) +...
-                                    (imag(LWtolayer).' * stolayerimag) ) +...
-                                    -1i* fdotimag .* ...
-                                    (  (imag(LWtolayer).' * stolayerreal) +...
-                                    -1*(real(LWtolayer).' * stolayerimag ) );
-                                
-                                sftolayerreal = real(sftolayer);
-                                sftolayerimag = imag(sftolayer);
-                                sensitivityf{layer} = sensitivityf{layer} + ...
-                                    fdotreal.* ...
-                                    (  (real(LWtolayer).' * sftolayerreal) +...
-                                    (imag(LWtolayer).' * sftolayerimag) ) +...
-                                    -1i* fdotimag .* ...
-                                    (  (imag(LWtolayer).' * sftolayerreal) +...
-                                    -1*(real(LWtolayer).' * sftolayerimag ) );
-                            else
-                                % last column of Weights are from the bias
-                                % term for nn+1 layer, which does not
-                                % contribute to nn layer, hence 1:end-1
-                                sensitivity{layer} = sensitivity{layer} + ...
-                                    conj(fdotlayer).* ( LWtolayer.' * stolayer);
-                                sensitivityf{layer} = sensitivityf{layer} + ...
-                                    conj(fdotlayer).* ( LWtolayer.' * sftolayer);
+                                if splitrealimag(layer)
+                                    % for 2-layer derivation, see equation(17)
+                                    % "Extension of the BackPropagation
+                                    % algorithm to complex numbers" by Tohru Nitta
+                                    LW_sensitivity.real = LW_sensitivity.real + ...
+                                        (  (real(LWtolayer).' * real(stolayer)) +...
+                                        (imag(LWtolayer).' * imag(stolayer)) );
+                                    LW_sensitivity.imag = LW_sensitivity.imag + ...
+                                        (  (imag(LWtolayer).' * real(stolayer)) +...
+                                        -1*(real(LWtolayer).' * imag(stolayer) ) );
+                                    
+                                    LW_sensitivityf.real = LW_sensitivityf.real + ...
+                                        (  (real(LWtolayer).' * real(sftolayer)) +...
+                                        (imag(LWtolayer).' * imag(sftolayer)) );
+                                    LW_sensitivityf.imag = LW_sensitivityf.imag + ...
+                                        (  (imag(LWtolayer).' * real(sftolayer)) +...
+                                        -1*(real(LWtolayer).' * imag(sftolayer)) );
+                                else
+                                    LW_sensitivity = LW_sensitivity + ...
+                                        ( LWtolayer.' * stolayer);
+                                    LW_sensitivityf = LW_sensitivityf + ...
+                                        ( LWtolayer.' * sftolayer);
+                                end
                             end
+                        end
+                        
+                        fdotlayer = fdot{layer};
+                        if splitrealimag(layer)
+                            sensitivity{layer} = fdotlayer.real.*LW_sensitivity.real +...
+                                -1i* fdotlayer.imag .* LW_sensitivity.imag;
+                            sensitivityf{layer} = fdotlayer.real.*LW_sensitivityf.real +...
+                                -1i* fdotlayer.imag .* LW_sensitivityf.imag;                            
+                        else
+                            sensitivity{layer} = conj(fdotlayer).*LW_sensitivity;
+                            sensitivityf{layer} = conj(fdotlayer).*LW_sensitivityf;                   
                         end
                     end % if nn=nbrofLayers, i.e. last layer
 
