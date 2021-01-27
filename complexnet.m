@@ -531,11 +531,11 @@ classdef complexnet < handle
             outhat = fn( w*in + b);
         end
         
+            
         %----------------------------------------------------------
         % given an input, determine the network output and intermediate
         % terms
-        function [out,x,y0,y,yprime] = test(obj,in)
-                        
+        function [out,n,a0,a,fdot] = test(obj,in)
             switch obj.domap
                 case 0
                     % gain only
@@ -551,14 +551,14 @@ classdef complexnet < handle
             % fyi: can zero out the bias by changing 1* to 0*
             biasvec = 1*ones(1,size(in,2));
             
-            y0 = [in; biasvec];
+            a0 = [in; biasvec];
 
             % used for derivative, but unnecessary since the corresponding
             % column is eliminated in the derivation of dc/dx
             zerovec = zeros(1,size(in,2));              
             
-            ynnminus1 = y0;                        
-            [x,y,yprime] = deal(cell(1,obj.nbrofLayers));
+            ynnminus1 = a0;                        
+            [n,a,fdot] = deal(cell(1,obj.nbrofLayers));
             for nn=1:obj.nbrofLayers
                 % weight matrix
                 W=obj.Weights{nn};
@@ -568,10 +568,10 @@ classdef complexnet < handle
                 activationfn = @(x) obj.(transferFcn)(x);  % handle
                 
                 % apply matrix of weights
-                x{nn} = W*ynnminus1;     % x{n} = W{n}y{n-1}
+                n{nn} = W*ynnminus1;     % x{n} = W{n}y{n-1}
                                 
                 % evaluate f(xn) and f'(xn)
-                [y{nn},yprime{nn}] = activationfn(x{nn});
+                [a{nn},fdot{nn}] = activationfn(n{nn});
                 
                 % include a bias vector for next layer
                 % final out y{nbrofLayers} does not have bias
@@ -581,12 +581,12 @@ classdef complexnet < handle
                     %yprime{nn} = [yprime{nn}; zerovec];
                     
                     % do include (additional row) the biasvec as part of y
-                    y{nn} = [y{nn}; biasvec];
+                    a{nn} = [a{nn}; biasvec];
                 end
-                ynnminus1 = y{nn};
+                ynnminus1 = a{nn};
             end
                
-            out_normalized = y{obj.nbrofLayers};
+            out_normalized = a{obj.nbrofLayers};
             switch obj.domap
                 case 0
                     % gain only
@@ -808,8 +808,8 @@ classdef complexnet < handle
                 fprintf('Hessian\n');
                 Hessian./jjrtocompare
                 
-                somescalar = mean(jace./jertocompare);
-                somescalar2 = mean(Hessian(:)./jjrtocompare(:))
+                somescalar = mean(jace./jertocompare,'omitnan');
+                somescalar2 = mean(Hessian(:)./jjrtocompare(:),'omitnan')
                 
                 fprintf('Ratio of my Hessian/ matlab Hessian [%e %e]\n',...
                     1-min(abs(Hessian(:)./jjrtocompare(:))),...
@@ -840,11 +840,6 @@ classdef complexnet < handle
                 %norm(dW1lsq - dWmatlab)
                 dW1lsq = lsqminnorm(Jact'*Jact,jace);
                 
-                % svd approach
-                [~,S,V] = svd(Jact);
-                svec = diag(S); svec2 = 1./(svec.*conj(svec));
-                dW1svd = (V*diag(svec2)*V')*jace;
-                
                 disp('no scaling d(cnet - matlab)');
                 norm(dW1 - dWmatlab)
                 disp('scaled d(cnet - matlab)');
@@ -858,8 +853,14 @@ classdef complexnet < handle
                 disp('d(cnet minnorm - matlab)');
                 norm(dW1lsq - dWmatlab)
                 
+                %{
+                % svd approach
+                [~,S,V] = svd(Jact);
+                svec = diag(S); svec2 = 1./(svec.*conj(svec));
+                dW1svd = (V*diag(svec2)*V')*jace;
                 disp('d(cnet svd - matlab)');
                 norm(dW1svd - dWmatlab)
+                %}
                 
             catch
                 Jac
@@ -922,12 +923,12 @@ classdef complexnet < handle
             end
             
             % allocate space for gradients
-            % deltax{n} = dcost/dx{n} vector of dimension x{n}
+            % sensitivity{n} = dcost/dx{n} vector of dimension x{n}
             % DeltaW{n} = dcost/dWeights{n} matrix of dimension W{n}
             % state is cell array with state of gradient and hessian approx
             % there is redundancy here since each layer has it's own state
             % that has rate parameters that are same - not a big deal
-            [deltax,DeltaW,state] = deal(cell(1,obj.nbrofLayers));
+            [sensitivity,DeltaW,state] = deal(cell(1,obj.nbrofLayers));
             
             switch obj.trainFcn
                 case 'trainlm'
@@ -978,7 +979,7 @@ classdef complexnet < handle
             % bias as well, but it does not change output dimension
             obj.nbrofUnits(1,1:end) =  obj.nbrofUnits(1,1:end) + 1;    % all input sizes of layers incremented                   
 
-            for nn=1:obj.nbrofLayers                    
+            for layer=1:obj.nbrofLayers                    
                 % warning: W*x used here instead of W'*x
                 % since y = W*x, the dimensions of W are out x in 
                 % NOT in x out                                
@@ -986,48 +987,48 @@ classdef complexnet < handle
                     %-----------------------------
                     % complex initializations
                     case 'crandn'
-                        obj.Weights{nn} = 0.01*obj.crandn( obj.nbrofUnits(2,nn), obj.nbrofUnits(1,nn) ); 
+                        obj.Weights{layer} = 0.01*obj.crandn( obj.nbrofUnits(2,layer), obj.nbrofUnits(1,layer) ); 
                      case 'crands'
-                        obj.Weights{nn} = rands( obj.nbrofUnits(2,nn), obj.nbrofUnits(1,nn) ) + ...
-                            1i*rands( obj.nbrofUnits(2,nn), obj.nbrofUnits(1,nn) ); 
+                        obj.Weights{layer} = rands( obj.nbrofUnits(2,layer), obj.nbrofUnits(1,layer) ) + ...
+                            1i*rands( obj.nbrofUnits(2,layer), obj.nbrofUnits(1,layer) ); 
                        
                     case 'c-nguyen-widrow'
                         %Matlab's Nguyen-Widrow Algorithm
-                        obj.Weights{nn} = zeros(  obj.nbrofUnits(2,nn), obj.nbrofUnits(1,nn) );
+                        obj.Weights{layer} = zeros(  obj.nbrofUnits(2,layer), obj.nbrofUnits(1,layer) );
                         activeregionofactivation = [-2 2];  % tansig('active');
                         mapregion = [-1 1];
-                        nbrofNeurons = obj.nbrofUnits(2,nn);
-                        nbrofIn = obj.nbrofUnits(1,nn)-1;
+                        nbrofNeurons = obj.nbrofUnits(2,layer);
+                        nbrofIn = obj.nbrofUnits(1,layer)-1;
                         mapregions = repmat(mapregion,nbrofIn,1);
                         [wr,br]=mycalcnw(mapregions,nbrofNeurons,activeregionofactivation);
                         [wi,bi]=mycalcnw(mapregions,nbrofNeurons,activeregionofactivation);                        
-                        obj.Weights{nn} = [wr+1i*wi br+1i*bi];                        
+                        obj.Weights{layer} = [wr+1i*wi br+1i*bi];                        
                         
                     %-----------------------------
                     % non-complex initializations                                        
                     case 'randn'
-                        obj.Weights{nn} = 0.01*randn( obj.nbrofUnits(2,nn), obj.nbrofUnits(1,nn) );                        
+                        obj.Weights{layer} = 0.01*randn( obj.nbrofUnits(2,layer), obj.nbrofUnits(1,layer) );                        
 
                     case 'nguyen-widrow'
                         %Matlab's Nguyen-Widrow Algorithm
-                        obj.Weights{nn} = zeros(  obj.nbrofUnits(2,nn), obj.nbrofUnits(1,nn) );
+                        obj.Weights{layer} = zeros(  obj.nbrofUnits(2,layer), obj.nbrofUnits(1,layer) );
                         activeregionofactivation = [-2 2];  % tansig('active');
                         mapregion = [-1 1];
-                        nbrofNeurons = obj.nbrofUnits(2,nn);
-                        nbrofIn = obj.nbrofUnits(1,nn)-1;
+                        nbrofNeurons = obj.nbrofUnits(2,layer);
+                        nbrofIn = obj.nbrofUnits(1,layer)-1;
                         mapregions = repmat(mapregion,nbrofIn,1);
                         [w,b]=mycalcnw(mapregions,nbrofNeurons,activeregionofactivation);
-                        obj.Weights{nn} = [w b];
+                        obj.Weights{layer} = [w b];
                         
                     % weights already initialized                        
                     case 'previous'
                         if isempty(obj.Weights)
                             error('change obj.initFcn=%s, since previous weights are empty',obj.initFcn);
                         end
-                        if any( size(obj.Weights{nn})~= [obj.nbrofUnits(2,nn), obj.nbrofUnits(1,nn)])
-                            fprintf('layer%d Weights %d x %d ~= dimensions %d x %d\n',nn,...
-                                size(obj.Weights{nn},1),size(obj.Weights{nn},2),...
-                                obj.nbrofUnits(2,nn), obj.nbrofUnits(1,nn));
+                        if any( size(obj.Weights{layer})~= [obj.nbrofUnits(2,layer), obj.nbrofUnits(1,layer)])
+                            fprintf('layer%d Weights %d x %d ~= dimensions %d x %d\n',layer,...
+                                size(obj.Weights{layer},1),size(obj.Weights{layer},2),...
+                                obj.nbrofUnits(2,layer), obj.nbrofUnits(1,layer));
                             error('change obj.initFcn=%s, since previous weights dimensions not matching',obj.initFcn);                            
                         end
                         
@@ -1055,16 +1056,16 @@ classdef complexnet < handle
                 end
                 %}
                 
-                [DeltaW{nn}] = ...
-                    deal(zeros( obj.nbrofUnits(2,nn), obj.nbrofUnits(1,nn) ));   
+                [DeltaW{layer}] = ...
+                    deal(zeros( obj.nbrofUnits(2,layer), obj.nbrofUnits(1,layer) ));   
                 
                 switch obj.trainFcn            
                     case 'trainlm'            
                         % Deltaf matrices are due to weights only 
-                        if nn==obj.nbrofLayers
-                            Deltaf{nn} = zeros(nbrofOutUnits,nbrofOutUnits,nbrofSamplesinBatch);
+                        if layer==obj.nbrofLayers
+                            Deltaf{layer} = zeros(nbrofOutUnits,nbrofOutUnits,nbrofSamplesinBatch);
                         else
-                            Deltaf{nn} = zeros(obj.nbrofUnits(2,nn),nbrofOutUnits,nbrofSamplesinBatch);                            
+                            Deltaf{layer} = zeros(obj.nbrofUnits(2,layer),nbrofOutUnits,nbrofSamplesinBatch);                            
                         end
                 end
             end
@@ -1072,12 +1073,12 @@ classdef complexnet < handle
             obj.totalnbrofParameters = sum(obj.nbrofWeights+obj.nbrofBias); 
             switch obj.trainFcn
                 case 'trainlm'
-                    Jac = zeros(obj.totalnbrofParameters,nbrofSamplesinBatch);
+                    Jac = zeros(obj.totalnbrofParameters,nbrofSamplesinBatch*nbrofOutUnits);
                     % Hessian and Jac*error are derived from Jac and don't
                     % need to be pre allocated
                     %Hessian = zeros(totalnbrofParameters,totalnbrofParameters);
                     %jace = zeros(totalnbrofParameters,1);                                        
-                    [deltaf,DeltaF] = deal(cell(1,obj.nbrofLayers));                    
+                    [sensitivityf,DeltaF] = deal(cell(1,obj.nbrofLayers));                    
             end
             
             % need a way to vectorize the weights for storage, and for
@@ -1138,7 +1139,9 @@ classdef complexnet < handle
             epoch = 0; 
             keeptraining = 1; 
             testfail = 0;
-            tstart = tic;
+            tstart = tic;            
+            %--------------S T A R T    E P O C H    L O O P --------------
+            %--------------------------------------------------------------
             while keeptraining
                 epoch=epoch+1;                
                 printthisepoch = (epoch/obj.printmseinEpochs == floor(epoch/obj.printmseinEpochs));
@@ -1156,7 +1159,7 @@ classdef complexnet < handle
                 batchtest = batchleft(1:nbrofSamplesinTest);                
                 batchvalidate = batchleft(nbrofSamplesinTest + (1:nbrofSamplesinValidate));
                 
-                % training, testing, and validation
+                % training, testing, and validation picks
                 trn_normalized = out_normalized(:,batchtrain);
                 trn = out(:,batchtrain);                
                 tst_normalized = out_normalized(:,batchtest);
@@ -1164,10 +1167,11 @@ classdef complexnet < handle
                 vl_normalized = out_normalized(:,batchvalidate);
                 vl = out(:,batchvalidate);
                 
-                
-                if 0 %epoch/10 == floor(epoch/10)
+                % teacher errors can help, need to pick error size relative
+                % to desired mse floor which may be tricky
+                if epoch/10 == floor(epoch/10)
                     %----------------------------------------------------------
-                    % introduce teacher error at 10 x smallest number
+                    % introduce teacher error at ??? x smallest number
                     % "Proposal of relative-minimization learning for behavior
                     % stabilization of complex-valued recurrent neural
                     % networks" by Akira Hirose, Hirofumi Onishi
@@ -1178,17 +1182,15 @@ classdef complexnet < handle
                             1i*teachererrorsize*(2*rand(size(in(:,batchtrain)))-1);
                     end
                     %----------------------------------------------------------
-                    if epoch==1
-                        fprintf('Using teacher errors +/- %e for robust learning\n',teachererrorsize);
-                    end
+                    fprintf('Using teacher errors +/- %e for robust learning\n',teachererrorsize);
                 else
                     teachererror = 0;
                 end
 
                 % evaluate network and obtain gradients and intermediate values
                 % y{end} is the output                                                
-                [curr,x,y0,y,yprime] = obj.test( in(:,batchtrain) + teachererror);
-                curr_normalized = y{obj.nbrofLayers};
+                [curr,n,a0,a,fdot] = obj.test( in(:,batchtrain) + teachererror);
+                curr_normalized = a{obj.nbrofLayers};
                 
                 % mean squared error in the unnormalized
                 % not taking 1/2 of the square 
@@ -1206,149 +1208,183 @@ classdef complexnet < handle
                     plot(curr_normalized(1:num),'.-'); hold on;
                     plot(trn_normalized(1:num),'o-');
                     ylim([-1 1]);
-                end
-                
+                end                
                 
                 %----------------------------------------------------------
-                % backpropagate to get all layers                
+                % B A C K   P R O P A G A T I O N
+                %----------------------------------------------------------
+                % start from last layer and recursively propagate gradient
+                
+                % nonlinearity is either split re/im or acts on both same
                 splitrealimag = zeros(1,obj.nbrofLayers);
+                
+                % keep track of accumulated gradient for stopping criteria
                 gradientacc = 0;
-                for nn=obj.nbrofLayers:-1:1                             
-                    % deltax is the gradient at the middle of the layer
-                    % deltax = d{cost}/d{xn} called "sensitivity"
-                    % 
-                    deltax{nn} = zeros( obj.nbrofUnits(2,nn), nbrofSamplesinBatch);
+                
+                for layer=obj.nbrofLayers:-1:1                             
+                    % sensitivity is the gradient wrt n, at the middle of the layer
+                    % sensitivity = d{error}^2/d{n}
+                    % sensitivityf = d{error}/d{n}
                     
-                    if isstruct(yprime{nn}), splitrealimag(nn) = 1; else, splitrealimag(nn)=0; end
+                    % split re/im derivatives are returned as .real,.imag
+                    if isstruct(fdot{layer}), splitrealimag(layer) = 1; else, splitrealimag(layer)=0; end
                     
-                    if nn==obj.nbrofLayers
-                        % for output layer, using mean-squared error
+                    % a{layer} is the input to each layer
+                    if layer==1 
+                        aprev = a0; % no previous layer for first layer
+                    else
+                        aprev = a{layer-1}; 
+                    end
+                    
+                    if layer==obj.nbrofLayers
+                        % for output layer, mean-squared error allows for
+                        % real and imag parts to be calculated sepaarately
+                        %
                         % w = w - mu (y-d) f'(net*) x*                        
-
-                        % have to include the dx/dy = 1/gain on the output
-                        % since mse is computed there
-                        % @todo: a better way is to make a constant output weighting node
-                        err_times_outputmap_derivative = obj.dounrealifyfn(derivative_outputmap * obj.dorealifyfn(curr-trn));
-                        
-                        if splitrealimag(nn)                            
-                            deltax{nn} = real(err_times_outputmap_derivative) .* yprime{nn}.real + ...
-                                1i* imag(err_times_outputmap_derivative).* yprime{nn}.imag;                                                        
-                            deltaf{nn} = yprime{nn}.real + 1i* yprime{nn}.imag;                            
-                        else                            
-                            deltax{nn} = err_times_outputmap_derivative .* conj( yprime{nn} );                            
-                            deltaf{nn} = conj( yprime{nn} );         
-                            
-                            % trying out split re/im even though it's not
-                            % correct
-                            %
-                            %deltax{nn} = real(err_times_outputmap_derivative) .* real( yprime{nn} ) + ...
-                            %    1i* imag(err_times_outputmap_derivative).* imag( yprime{nn} );                                                        
-                            %deltaf{nn} = real( yprime{nn} ) + 1i* imag( yprime{nn} );                            
+                        err = curr-trn;
+                        if splitrealimag(layer)            
+                            % fdot is the derivative of the output nonlinearity
+                            % include the outputmap since it affects the error
+                            fdot_times_outputmap_derivative = ...
+                                obj.dounrealifyfn(derivative_outputmap * obj.dorealifyfn(fdot{layer}.real + 1i*fdot{layer}.imag));                            
+                            sensitivity{layer} = real(err) .* real(fdot_times_outputmap_derivative) + ...
+                                1i* imag(err).* imag(fdot_times_outputmap_derivative);                                                        
+                        else  
+                            fdot_times_outputmap_derivative = obj.dounrealifyfn(derivative_outputmap * obj.dorealifyfn(fdot{layer}));                            
+                            sensitivity{layer} = err .* conj( fdot_times_outputmap_derivative );
+                        end                                                
+                                      
+                        % compute sensitivityf = derror/dn for possibly
+                        % multiple outputs.  each row is due to each output
+                        % [ derror/dn      0          0     ]
+                        % [    0        derror/dn     0     ]   
+                        % [    0           0       derror/dn]
+                        for outindex = 1:nbrofOutUnits
+                            outputinds = (outindex-1)*nbrofSamplesinBatch + (1:nbrofSamplesinBatch);
+                            if splitrealimag(layer)
+                                sensitivityf{layer}(outindex,outputinds) = fdot_times_outputmap_derivative(outindex,:);                            
+                            else
+                                sensitivityf{layer}(outindex,outputinds) = conj( fdot_times_outputmap_derivative(outindex,:));         
+                            end
                         end                        
-                    else                         
-                        dx_nnplus1 = deltax{nn+1}; % =0, assigned just for dimensions
-                        yp_nn = yprime{nn};
-                        W_nnplus1 = obj.Weights{nn+1};
-                        df_nnplus1 = deltaf{nn+1}; % =0, assigned just for dimensions
-                        
-                        if splitrealimag(nn)
+                    else                        
+                        % recursive steps for other layers 
+                        % sensitivity{layer} = fdot{layer} * W{layer+1} * sensitivity{layer+1}
+                        % sensitivityf{layer} = fdot{layer} * W{layer+1} * sensitivityf{layer+1}
+                        sensitivity{layer} = ...
+                            zeros( obj.nbrofUnits(2,layer), nbrofSamplesinBatch);                        
+                        sensitivityf{layer} = ...
+                            zeros( obj.nbrofUnits(2,layer), nbrofOutUnits*nbrofSamplesinBatch);
+                                                
+                        % last column of Weights are from the bias
+                        % term for layer+1, which does not
+                        % contribute to layer, hence 1:end-1
+                        Wtolayer = obj.Weights{layer+1}(:,1:end-1);
+                        fdotlayer = fdot{layer};                        
+
+                        stolayer = sensitivity{layer+1};
+                        if splitrealimag(layer)
                             % for 2-layer derivation, see equation(17)
                             % "Extension of the BackPropagation
                             % algorithm to complex numbers" by Tohru Nitta
-                            ypr = yp_nn.real;
-                            ypi = yp_nn.imag;
-                            dxr_nnplus1 = real(dx_nnplus1);
-                            dxi_nnplus1 = imag(dx_nnplus1);
-                            deltax{nn} = ypr.* ...
-                                (  (real(W_nnplus1(:,1:end-1)).' * dxr_nnplus1) +...
-                                (imag(W_nnplus1(:,1:end-1)).' * dxi_nnplus1) ) +...
-                                -1i* ypi .* ...
-                                (  (imag(W_nnplus1(:,1:end-1)).' * dxr_nnplus1) +...
-                                   -1*(real(W_nnplus1(:,1:end-1)).' * dxi_nnplus1 ) );
-                            
-                            dfr_nnplus1 = real(df_nnplus1);
-                            dfi_nnplus1 = imag(df_nnplus1);                            
-                            deltaf{nn} = ypr.* ...
-                                (  (real(W_nnplus1(:,1:end-1)).' * dfr_nnplus1) +...
-                                (imag(W_nnplus1(:,1:end-1)).' * dfi_nnplus1) ) +...
-                                -1i* ypi .* ...
-                                (  (imag(W_nnplus1(:,1:end-1)).' * dfr_nnplus1) +...
-                                   -1*(real(W_nnplus1(:,1:end-1)).' * dfi_nnplus1 ) );
-                        else
-                            % last column of Weights are from the bias
-                            % term for nn+1 layer, which does not
-                            % contribute to nn layer, hence 1:end-1
-                            deltax{nn} = conj(yp_nn).* ( W_nnplus1(:,1:end-1).' * dx_nnplus1);
-                            deltaf{nn} = conj(yp_nn).* ( W_nnplus1(:,1:end-1).' * df_nnplus1);
+                            fr = fdotlayer.real; fi = fdotlayer.imag;
+                            sr = real(stolayer); si = imag(stolayer);
+                            sensitivity{layer} = fr.* ...
+                                (  (real(Wtolayer).' * sr) +...
+                                (imag(Wtolayer).' * si) ) +...
+                                -1i* fi .* ...
+                                (  (imag(Wtolayer).' * sr) +...
+                                -1*(real(Wtolayer).' * si ) );                            
+                        else                            
+                            sensitivity{layer} = conj(fdotlayer).* ( Wtolayer.' * stolayer);
                         end
-                    end % if nn=nbrofLayers, i.e. last layer
-                    
-                    if nn==1 
-                        ynnminus1 = y0; % no previous layer for first layer
-                    else
-                        ynnminus1 = y{nn-1}; 
-                    end
+                        
+                        % for multiple outputs, need to loop through outputs
+                        % easy way to think of this is that multiple
+                        % outputs causes a fork at the last layer, which
+                        % then requires keeping that many gradients
+                        for outindex = 1:nbrofOutUnits
+                            outputinds = (outindex-1)*nbrofSamplesinBatch + (1:nbrofSamplesinBatch);
+                            sftolayer = sensitivityf{layer+1}(:,outputinds);
+                            if splitrealimag(layer)
+                                fr = fdotlayer.real; fi = fdotlayer.imag;
+                                sfr = real(sftolayer); sfi = imag(sftolayer);                                
+                                sensitivityf{layer}(:,outputinds) = fr.* ...
+                                    (  (real(Wtolayer).' * sfr) +...
+                                    (imag(Wtolayer).' * sfi) ) +...
+                                    -1i* fi .* ...
+                                    (  (imag(Wtolayer).' * sfr) +...
+                                    -1*(real(Wtolayer).' * sfi ) );
+                            else
+                                sensitivityf{layer}(:,outputinds) = conj(fdotlayer).* ( Wtolayer.' * sftolayer);
+                            end
+                        end
+                        
+                    end % if layer=nbrofLayers, i.e. last layer
                     
                     % obj.nbrofUnits(2,nn) x obj.nbrofUnits(1,nn)
-                    % outer product of deltax with ynnminus1, summed over
-                    % the measurements                    
-                    DeltaW{nn} = deltax{nn}*ynnminus1'/nbrofSamplesinBatch; 
+                    % weighted sum of sensitivity with a{layer-1}
+                    DeltaW{layer} = sensitivity{layer}*aprev'/nbrofSamplesinBatch;
 
-                    for ll = 1:obj.nbrofUnits(2,nn)    
-                        dF = zeros(obj.nbrofUnits(1,nn),nbrofSamplesinBatch);
-                        dF(1:end-1,:) = bsxfun(@times,conj(ynnminus1(1:end-1,:)),deltaf{nn}(ll,:));       
-                        dF(end,:) = deltaf{nn}(ll,:);
-                        DeltaF{nn}(ll,:,:) = dF;
-                    end    
+                    % Jacobian (DeltaF) terms are obtained as outer product
+                    % of input a with sensitivityf
+                    for outindex = 1:nbrofOutUnits
+                        outputinds = (outindex-1)*nbrofSamplesinBatch + (1:nbrofSamplesinBatch);                        
+                        for layeroutputindex = 1:obj.nbrofUnits(2,layer)
+                            dF = zeros(obj.nbrofUnits(1,layer),nbrofSamplesinBatch);
+                            ap = aprev(1:end-1,:);
+                            sf = sensitivityf{layer}(layeroutputindex,outputinds);
+ 
+                            % Jacobian terms for weights and bias
+                            dF(1:end-1,:) = bsxfun(@times,conj(ap),sf);                            
+                            dF(end,:) = sf;
+                            
+                            DeltaF{layer}(layeroutputindex,:,outputinds) = dF;
+                        end
+                    end
                     
                     if obj.debugPlots && printthisepoch
                         figure(1023);
-                        subplot(obj.nbrofLayers,1,nn)
-                        imagesc(real(DeltaW{nn})); colorbar;
+                        subplot(obj.nbrofLayers,1,layer)
+                        imagesc(real(DeltaW{layer})); colorbar;
                     end
-                    gradientacc = gradientacc + sum(abs(DeltaW{nn}(:)).^2);
+                    
+                    % accumulate the gradient
+                    gradientacc = gradientacc + sum(abs(DeltaW{layer}(:)).^2);
                 end
                 gradientacc = sqrt( gradientacc );  
                 
-                %for linear single neuron, no output mapping
-                % DeltaW = err_times_outputmap_derivative .* conj( yprime{nn} ) * ynnminus1'/nbrofSamplesinBatch;      
-                % Jac = conj( yprime{nn} ) * conj(ynnminus1(1:end-1,mm)));
-                % jace += transpose(Jac) * err_times_outputmap_derivative(:,mm);
                 
+                %----------------------------------------------------------
+                % W E I G H T    U P D A T E
+                %----------------------------------------------------------                
                 % update all the weight matrices (including bias weights)
                 %
                 switch obj.trainFcn
                     case 'trainlm'
-                        % compute jacobian matrix
-                        for nn=1:obj.nbrofLayers
+                        % VECTORIZE the Jacobian and the gradient
+                        for layer=1:obj.nbrofLayers
                             % vectorize the layer weights and bias by
                             % reshaping first two dimensions into a vector
-                            DF=reshape(DeltaF{nn},prod(size(DeltaF{nn},[1 2])),nbrofSamplesinBatch);
-                            
+                            DF=reshape(DeltaF{layer},prod(size(DeltaF{layer},[1 2])),nbrofOutUnits*nbrofSamplesinBatch);
+                                                        
                             % assign the appropriate portion of the
                             % jacobian so it's easier to keep track
-                            Jac([obj.layerweightinds{nn} obj.layerbiasinds{nn}],:) = DF;                            
+                            Jac([obj.layerweightinds{layer} obj.layerbiasinds{layer}],:) = DF;       
+                            
                         end                       
-                        Jac = Jac / (obj.outputSettings.gain(1) * sqrt(nbrofSamplesinBatch));
+                        Jac = Jac / sqrt(nbrofSamplesinBatch);
                         Hessian = (Jac*Jac');
                         
-                        % Use the gradient way of calculating 
-                        % jace = Jacobian * error, since this propagates 
-                        % the error real,im parts correctly.  
-                        % For the Hessian = Jacobian * Jacobian', the 
-                        % LM computation is correct since this involves 
-                        % the propagation of the function and current 
-                        % weights derivatives and does not involve the 
-                        % current error.                        
                         % Only use this line for real only case:
-                        %jace = Jac*transpose(curr_normalized - trn_normalized);
+                        % jace = Jac*transpose(curr_normalized - trn_normalized);
                         % this line works for real and complex case:
-                        jace = Weights_to_vec(obj,DeltaW);                                                
-                        
+                        jace = Weights_to_vec(obj,DeltaW);                        
                         
                         %--------------------------------------------------
                         %        D E B U G with MATLAB jacobian
                         % this is mostly code for deep numerical dive
+                        % use comparenets.m to set this up
                         %--------------------------------------------------                        
                         if obj.debugCompare
                             debug_lm(obj,Jac,jace,Hessian,matlablayerweightinds,matlablayerbiasinds);
@@ -1397,14 +1433,14 @@ classdef complexnet < handle
                                                         
                             % convert vector to Weights
                             DeltaW = vec_to_Weights(obj,WbWb);
-                            for nn=1:obj.nbrofLayers                              
+                            for layer=1:obj.nbrofLayers                              
                                 if obj.debugPlots && printthisepoch
                                     figure(1024);
-                                    subplot(obj.nbrofLayers,1,nn)
-                                    imagesc(real(DeltaW{nn})); colorbar;
+                                    subplot(obj.nbrofLayers,1,layer)
+                                    imagesc(real(DeltaW{layer})); colorbar;
                                     figure(101); imagesc(real(Hessian)); colorbar;
                                 end                                
-                                obj.Weights{nn} = obj.Weights{nn} -  DeltaW{nn};
+                                obj.Weights{layer} = obj.Weights{layer} -1*DeltaW{layer};
                             end
                             
                             curr = obj.test( in(:,batchtrain) );                            
@@ -1440,8 +1476,8 @@ classdef complexnet < handle
                             if msetrn>msecurr
                                 obj.mu=obj.mu*obj.mu_inc; % pad the Hessian more
                                 % undo the weight step
-                                for nn=1:obj.nbrofLayers
-                                    obj.Weights{nn} = obj.Weights{nn} +  DeltaW{nn};
+                                for layer=1:obj.nbrofLayers
+                                    obj.Weights{layer} = obj.Weights{layer} +1*DeltaW{layer};
                                 end
                             else
                                 % as mu decreases, becomes Newton's method
@@ -1449,27 +1485,20 @@ classdef complexnet < handle
                             end
                         end                                                
                        
-                        %{
-                        % switch to slow gradient at the end
-                        if obj.mu>=obj.mu_max
-                            newtrainFcn = 'Adadelta';
-                            warning('Switching from %s to %s\n',obj.trainFcn);
-                            obj.trainFcn = newtrainFcn;
-                            obj.mu=0;
-                        end 
-                        %}
+                    otherwise                        
+                        %--------------------------------------------------
+                        % simple gradient based approaches are easy to
+                        % update
 
-                        
-                    otherwise
                         thegradientfunction = str2func(obj.trainFcn);
-                        for nn=1:obj.nbrofLayers
+                        for layer=1:obj.nbrofLayers
                             try
-                                [DeltaW{nn},state{nn}] = ...
-                                    thegradientfunction(DeltaW{nn},state{nn});
+                                [DeltaW{layer},state{layer}] = ...
+                                    thegradientfunction(DeltaW{layer},state{layer});
                             catch
                                 error('Unable to train using %s. Path must have ./gradient_descent',obj.trainFcn);
                             end
-                            obj.Weights{nn} = obj.Weights{nn} - DeltaW{nn};
+                            obj.Weights{layer} = obj.Weights{layer} - DeltaW{layer};
                         end
                 end
                 
@@ -1525,7 +1554,10 @@ classdef complexnet < handle
                 keeptraining = all( struct2array(kt) );
                 
             end % while keeptraining
-
+            %----------------E N D    E P O C H    L O O P ----------------
+            %--------------------------------------------------------------
+            
+            
             if epoch>obj.max_fail
                 if kt.fail==0
                     ind = 1;
@@ -1563,8 +1595,6 @@ classdef complexnet < handle
             end            
             
         end
-        
-        
     end
 end
 

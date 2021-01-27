@@ -446,7 +446,12 @@ classdef complexcascadenet < handle
         % given an input, determine the network output and intermediate
         % terms
         function [out,n,a0,a,fdot] = test(obj,in)
-                        
+            
+            [n,a,fdot] = deal(cell(obj.nbrofLayers,1));
+            out = []; a0 = [];            
+            
+            if isempty(in), return; end
+            
             switch obj.domap
                 case 0
                     % gain only
@@ -459,19 +464,17 @@ classdef complexcascadenet < handle
             
             % scaled version of input provided for weight updates
             a0 = in;
-            
-            [n,a,fdot] = deal(cell(obj.nbrofLayers,1));
             for layer=1:obj.nbrofLayers                
                 % transfer function
                 transferFcn = obj.layers{layer}.transferFcn;  % string
                 activationfn = @(x) obj.(transferFcn)(x);  % handle
 
-                n{layer} = 0;
-                
                 % weight matrix for input to current layer
                 W=obj.InputWeights{layer};                       
                 if ~isempty(W)
                     n{layer} = W*in;            % x{n} = W{n}y{n-1}
+                else
+                    n{layer} = [];
                 end
                             
                 % from previous layers (nn,nn-1) is the usual connection,
@@ -479,15 +482,26 @@ classdef complexcascadenet < handle
                 for fromlayer=1:layer-1
                     % weight matrix for previous layers
                     W=obj.LayerWeights{layer,fromlayer};
-                    if ~isempty(W)
-                        n{layer} = n{layer} + W*a{fromlayer};     % x{n} = W{n}y{mm}
+                    if ~isempty(W) 
+                        if isempty(a{fromlayer})
+                            error('test: a{%d} empty for layer weight{%d,%d}\n',...
+                                fromlayer,layer,fromlayer)
+                        elseif isempty(n{layer})                                
+                            n{layer} = W*a{fromlayer};    
+                        else
+                            n{layer} = n{layer} + W*a{fromlayer};     % x{n} = W{n}y{mm}
+                        end
                     end
                 end
                 
                 % bias
                 b=obj.bias{layer};
                 if ~isempty(b)
-                    n{layer} = n{layer} + b;                
+                    if ~isempty(n{layer})                        
+                        n{layer} = n{layer} + b;   
+                    else
+                        error('test: n{%d} empty but bias{%d} connected\n',layer,layer);
+                    end
                 end
                 
                 % evaluate f(xn) and f'(xn)
@@ -1029,23 +1043,25 @@ classdef complexcascadenet < handle
                         % have to include the dx/dy = 1/gain on the output
                         % since mse is computed there
                         % @todo: a better way is to make a constant output weighting node
-                        err_times_outputmap_derivative = obj.dounrealifyfn(derivative_outputmap * obj.dorealifyfn(curr-trn));
-                        
-                        if splitrealimag(layer)                            
-                            sensitivity{layer} = real(err_times_outputmap_derivative) .* fdot{layer}.real + ...
-                                1i* imag(err_times_outputmap_derivative).* fdot{layer}.imag;                                                        
-                            sensitivityf{layer} = fdot{layer}.real + 1i* fdot{layer}.imag;                            
-                        else                            
-                            sensitivity{layer} = err_times_outputmap_derivative .* conj( fdot{layer} );                            
-                            sensitivityf{layer} = conj( fdot{layer} );         
+                        err = curr-trn;
+                        if splitrealimag(layer)            
+                            fdot_times_outputmap_derivative = ...
+                                obj.dounrealifyfn(derivative_outputmap * obj.dorealifyfn(fdot{layer}.real + 1i*fdot{layer}.imag));                            
+                            sensitivity{layer} = real(err) .* real(fdot_times_outputmap_derivative) + ...
+                                1i* imag(err).* imag(fdot_times_outputmap_derivative);                                                        
+                            sensitivityf{layer} = fdot_times_outputmap_derivative;                            
+                        else  
+                            fdot_times_outputmap_derivative = obj.dounrealifyfn(derivative_outputmap * obj.dorealifyfn(fdot{layer}));                            
+                            sensitivity{layer} = err .* conj( fdot_times_outputmap_derivative );                            
+                            sensitivityf{layer} = conj( fdot_times_outputmap_derivative );         
                         end                        
                     else                                                
-                        % factor out the fdot from the for loop
+                        % factor out the fdot from the r loop
                         % as in fdot  * sum{ sensitivity{tolayer}*W }   
                         %                \-----LW_sensitivity-------/                        
                         if splitrealimag(layer)
-                            LW_sensitivity.real = 0;LW_sensitivity.imag = 0;
-                            LW_sensitivityf.real = 0;LW_sensitivityf.imag = 0;
+                            LW_sensitivity.real = 0; LW_sensitivity.imag = 0;
+                            LW_sensitivityf.real = 0; LW_sensitivityf.imag = 0;
                         else
                             LW_sensitivity = 0;
                             LW_sensitivityf = 0;
@@ -1160,7 +1176,7 @@ classdef complexcascadenet < handle
                     case 'trainlm'
                         % convert jacobian matrix portions into big matrix
                         Jac = Weights_to_vec(obj,Jacb,JacIW,JacLW);
-                        Jac = Jac / (obj.outputSettings.gain(1) * sqrt(nbrofSamplesinBatch));
+                        Jac = Jac / sqrt(nbrofSamplesinBatch);
                         Hessian = (Jac*Jac');
                         
                         % Use the gradient way of calculating 
