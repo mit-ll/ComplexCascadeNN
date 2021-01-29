@@ -25,16 +25,7 @@ classdef complexnet < handle
         WeightsHistory         % history of weights
         WeightsCircularBuffer  % circular buffer of last max_fail weights
         
-        
-        
-        cascadeWeights 
-        cascadeWeightsHistory         % history of weights
-        cascadeWeightsCircularBuffer  % circular buffer of last max_fail weights
-        
-        
-        
-        
-
+                
         trainFcn     % see options in gradient_descent directory
                      % Hessian-based 'trainlm'=Levenberg-Marquardt
               
@@ -49,7 +40,13 @@ classdef complexnet < handle
         initFcn      % 'randn','nguyen-widrow'
 
         minbatchsize
-        batchtype    %'randperm','fixed'
+        batchtype    %'randperm','fixed','index'
+        
+        % for batchtype fixed
+        trainInd
+        valInd
+        testInd
+        
         
         nbrofEpochs
         
@@ -68,11 +65,11 @@ classdef complexnet < handle
         
         % for comparison with MATLAB feedforwardnet output
         debugCompare
-        weightRecord
-        jeRecord
-        jjRecord        
-        weightRecord2
-        
+        %weightRecord
+        %jeRecord
+        %jjRecord        
+        %weightRecord2        
+        workerRecord
     end
     
     properties (Constant)
@@ -302,6 +299,13 @@ classdef complexnet < handle
                 obj.batchtype= params.batchtype; 
             else
                 obj.batchtype = obj.batchtypedefault;
+            end
+            
+            switch obj.batchtype
+                case 'index'
+                    obj.trainInd = params.trainInd;
+                    obj.valInd = params.valInd;
+                    obj.testInd = params.testInd;
             end
                         
             if isfield(params,'lrate')
@@ -622,7 +626,8 @@ classdef complexnet < handle
         
        
         %------------------------------------------------------------------
-        function obj = copynet(obj,net,IW,LW,b,weightRecord,jeRecord,jjRecord,weightRecord2)            
+        %function obj = copynet(obj,net,IW,LW,b,weightRecord,jeRecord,jjRecord,weightRecord2)      
+        function obj = copynet(obj,net,IW,LW,b,workerRecord)
             % copy over matlab weights            
 
             if isempty(obj.Weights)
@@ -636,7 +641,12 @@ classdef complexnet < handle
                 LW = net.LW;
                 b = net.b;
             end
-                        
+              
+            if exist('workerRecord','var')
+                obj.workerRecord = workerRecord;
+                [b,IW,LW] = separatewb(net,workerRecord{1}.WB);
+            end
+            %{
             if exist('weightRecord','var')
                 % these are the weights in the weight record
                 %[b,IW,LW] = separatewb(net,weightRecord{1});
@@ -653,7 +663,7 @@ classdef complexnet < handle
                 %[b,IW,LW] = separatewb(net,weightRecord{1});
                 obj.weightRecord2=weightRecord2;
             end
-            
+            %}            
             
             for ll = 1:obj.nbrofLayers                                                
                 if ll==1
@@ -736,7 +746,7 @@ classdef complexnet < handle
             end
         end        
         
-        function debug_lm(obj,Jac,jace,Hessian,matlablayerweightinds,matlablayerbiasinds)
+        function debug_lm(obj,epoch,Jac,jace,Hessian,matlablayerweightinds,matlablayerbiasinds)
             % from "comparenets.m"
             % sequence to allow for comparing nets:
             %
@@ -748,13 +758,33 @@ classdef complexnet < handle
             %
             % matlab uses bias, weights, ... convention
             %[b,IW,LW] = separatewb(net,weightRecord{1});    
-            epoch = 1;
             try
-                wr = obj.weightRecord{epoch};
-                jer = obj.jeRecord{epoch};
-                jjr = obj.jjRecord{epoch};
-                wr2 = obj.weightRecord2{epoch};
+                mu = obj.mu;
+                                
+                wRecord = obj.workerRecord;                
+                wr = wRecord{epoch}.WB;
+                jer = wRecord{epoch}.je;
+                jjr = wRecord{epoch}.jj;
+                wr2 = wRecord{epoch}.WB2;                
                 
+                %{                
+                % checking that worker has been saved correctly
+                norm(wr2 - wRecord{2}.WB)  
+                
+                % checking matlab's step with itself, using the 
+                % saved jacobian and grad
+                norm(wr - (jjr + wRecord{epoch}.mu*eye(size(jjr)))\jer - wr2)
+                
+                % matlab uses multiple workers to achieve better training
+                for ep=2:20 
+                    fprintf('epoch %d %f\n', ep,norm(wRecord{ep}.WB - wRecord{ep-1}.WB2))
+                end
+                
+                %}
+                
+                fprintf('\n\n----------------EPOCH %d -------------------\n\n',epoch);
+                fprintf('going through each layer weights\n')
+                                
                 Weightsmatlab = cell(1,obj.nbrofLayers);
                 Weightsmatlab2 = cell(1,obj.nbrofLayers);
                 matlablayersinds = []; layersinds = [];
@@ -783,14 +813,21 @@ classdef complexnet < handle
                     fprintf('layer%d net weights2 (after update)\n',nn);
                     Weightsmatlab2{nn}
                     
-                    fprintf('layer%d [jew jace]\n',nn);
-                    [jew jace(obj.layerweightinds{nn})]
-                    fprintf('layer%d [jeb jace]\n',nn);
-                    [jeb jace(obj.layerbiasinds{nn})]
+                    fprintf('layer%d [jew 1/2*jace]\n',nn);
+                    [jew 1/2 * jace(obj.layerweightinds{nn})]
+                    fprintf('layer%d [jeb 1/2*jace]\n',nn);
+                    [jeb 1/2 * jace(obj.layerbiasinds{nn})]
                     
                     matlablayersinds = [ matlablayersinds matlablayerweightinds{nn} matlablayerbiasinds{nn}];
                     layersinds = [ layersinds obj.layerweightinds{nn} obj.layerbiasinds{nn}];
                 end
+                
+                wr = wRecord{epoch}.WB;        % matlab at start of epoch in matlab format
+                w = Weights_to_vec(obj,obj.Weights);
+                fprintf('at start of epoch %d: || weightRecord matlab - weights ||\n',epoch);
+                norm( wr(matlablayersinds) - w)
+
+                fprintf('comparing the gradient and jacobian\n');
                 
                 % convert from matlab's indexing to WbWb
                 % and compare each element
@@ -802,11 +839,12 @@ classdef complexnet < handle
                     end
                 end
                 jertocompare = jer(matlablayersinds);
-                fprintf('Jacobian * error\n');
-                jace./jertocompare
                 
-                fprintf('Hessian\n');
-                Hessian./jjrtocompare
+                %fprintf('Jacobian * error\n');
+                %jace./jertocompare
+                
+                %fprintf('Hessian\n');
+                %Hessian./jjrtocompare
                 
                 somescalar = mean(jace./jertocompare,'omitnan');
                 somescalar2 = mean(Hessian(:)./jjrtocompare(:),'omitnan')
@@ -818,13 +856,13 @@ classdef complexnet < handle
                     norm(jace/somescalar - jertocompare),...
                     norm(Hessian/somescalar2 - jjrtocompare));
                 
-                dWmatlab = (jjrtocompare + 1e-3 * eye(obj.totalnbrofParameters))\jertocompare;
+                dWmatlab = (jjrtocompare + mu * eye(obj.totalnbrofParameters))\jertocompare;
                 
-                dW1 = (Hessian + 1e-3 * eye(obj.totalnbrofParameters))\jace;
-                dW1s = (Hessian/somescalar2+ 1e-3 * eye(obj.totalnbrofParameters))\(jace/somescalar);
+                dW1 = (Hessian + mu * eye(obj.totalnbrofParameters))\jace;
+                dW1s = (Hessian/somescalar2+ mu * eye(obj.totalnbrofParameters))\(jace/somescalar);
                 
                 % QR decomposition approach
-                Jact = [Jac sqrt(1e-3)*eye(obj.totalnbrofParameters)]';
+                Jact = [Jac sqrt(mu)*eye(obj.totalnbrofParameters)]';
                 R1 = triu(qr(Jact));
                 dW1qr = R1\(R1'\jace);
                 
@@ -853,6 +891,14 @@ classdef complexnet < handle
                 disp('d(cnet minnorm - matlab)');
                 norm(dW1lsq - dWmatlab)
                 
+                figure(199); clf;
+                title(sprintf('epoch %d gradient',epoch));
+                plot(db(abs(jertocompare)),'o-'); hold on; plot(db(abs(jace/2)),'.-')
+                figure(201); clf;
+                title(sprintf('epoch %d jacobian',epoch));                
+                %imagesc( db(abs( Hessian./jjrtocompare ) ) )
+                plot( db(abs( Hessian(:)/2)),'o-');hold on;plot(db(abs(jjrtocompare(:) ) ) ,'.-')
+                
                 %{
                 % svd approach
                 [~,S,V] = svd(Jact);
@@ -861,6 +907,12 @@ classdef complexnet < handle
                 disp('d(cnet svd - matlab)');
                 norm(dW1svd - dWmatlab)
                 %}
+                
+                fprintf('checking the step using complexnet''s grad,jac\n');
+                dW = (Hessian/somescalar2+ mu * eye(obj.totalnbrofParameters))\(jace/somescalar);                
+                norm(w - dW - wr2(matlablayersinds))
+                                
+                fprintf('\n----------------EPOCH %d -------------------\n\n',epoch);
                 
             catch
                 Jac
@@ -1140,6 +1192,11 @@ classdef complexnet < handle
             keeptraining = 1; 
             testfail = 0;
             tstart = tic;            
+            best.WbWb = Weights_to_vec(obj,obj.Weights);
+            % initializing mse to inf even though not true, first step
+            % always takes place
+            [best.msetst,best.msetrn,best.msevl] = deal(Inf);
+            
             %--------------S T A R T    E P O C H    L O O P --------------
             %--------------------------------------------------------------
             while keeptraining
@@ -1154,10 +1211,17 @@ classdef complexnet < handle
                         batchtrain = randperm(nbrofSamples,nbrofSamplesinBatch);
                     case 'fixed'
                         batchtrain = 1:nbrofSamplesinBatch;                        
+                    case 'index'
+                        batchtrain = obj.trainInd;
+                        batchtest = obj.testInd;
+                        batchvalidate = obj.valInd;
                 end                
-                batchleft = setdiff(1:nbrofSamples,batchtrain);                
-                batchtest = batchleft(1:nbrofSamplesinTest);                
-                batchvalidate = batchleft(nbrofSamplesinTest + (1:nbrofSamplesinValidate));
+                switch obj.batchtype
+                    case {'randperm','fixed'}
+                        batchleft = setdiff(1:nbrofSamples,batchtrain);
+                        batchtest = batchleft(1:nbrofSamplesinTest);
+                        batchvalidate = batchleft(nbrofSamplesinTest + (1:nbrofSamplesinValidate));
+                end
                 
                 % training, testing, and validation picks
                 trn_normalized = out_normalized(:,batchtrain);
@@ -1196,7 +1260,7 @@ classdef complexnet < handle
                 % not taking 1/2 of the square 
                 % normalized would be y{obj.nbrofLayers} - out_normalized
                 msecurr = mean( abs(curr(:)-trn(:)).^2 );
-                       
+                                                           
                 if obj.debugPlots && printthisepoch                                        
                     figure(901);clf;
                     subplot(211)
@@ -1387,7 +1451,7 @@ classdef complexnet < handle
                         % use comparenets.m to set this up
                         %--------------------------------------------------                        
                         if obj.debugCompare
-                            debug_lm(obj,Jac,jace,Hessian,matlablayerweightinds,matlablayerbiasinds);
+                            debug_lm(obj,epoch,Jac,jace,Hessian,matlablayerweightinds,matlablayerbiasinds);
                         end               
                         
                         trn = out(:,batchtrain);
@@ -1396,13 +1460,13 @@ classdef complexnet < handle
 
                         % generally, QR decomposition has better behavior
                         % than computing Hessian via Jac*Jac'
-                        USEQR = 1; 
+                        USEQR = 0; 
                         % fast update is rank one updates to base qr(Jac')
                         FAST_UPDATE = 0;
                         if USEQR && FAST_UPDATE,  R = qr(Jac'); end
                         while (msetrn>msecurr) && (obj.mu<obj.mu_max)                            
                             % Levenberg Marquardt                            
-                            Hblend = Hessian + obj.mu*ee;
+                            Hblend = Hessian/2 + obj.mu*ee;
                             %Hblend = Hessian + (obj.mu*diag(diag(Hessian)));
                             
                             if isnan(rcond(Hblend))
@@ -1413,7 +1477,7 @@ classdef complexnet < handle
                             % Blended Newton / Gradient 
                             % (i.e. LevenBerg-Marquardt)                            
                             if USEQR==0
-                                WbWb = Hblend\jace;
+                                WbWb = Hblend\(jace/2);
                             else
                                 % use qr decomposition instead of Hessian which
                                 % is obtained by squaring
@@ -1449,6 +1513,13 @@ classdef complexnet < handle
                             if printthisepoch
                                 fprintf('mu %e msetrn %e\n',obj.mu,msetrn);
                             end
+                            
+                            %{
+                            % for debugging, checking validate
+                            curr = obj.test( in(:,batchvalidate) );                            
+                            % Check the mse for the update
+                            msevl = mean( abs(curr(:)-vl(:)).^2 );
+                            %}
                             
                             %{
                             % trying out the residual step, generally
@@ -1521,23 +1592,32 @@ classdef complexnet < handle
                 msetest(epoch) = msetst;
                 msevalidate(epoch) = msevl;
 
-                %if (epoch>max_fail)
-                %    msemin = min(msetest(1: epoch-max_fail) );
-                %    if msetst > msemin + eps
-                %        testfail = max_fail;
-                %    end
-                %end
-                
-                if epoch>1 
-                    if msevl > msevalidate(epoch-1) + eps
-                        testfail = testfail + 1;   % count fail to decrease
-                    else
-                        % reset to zero, allowing for up down fluctuation
-                        % primarily at the beginning of training
-                        testfail = 0;              
+                if numel(batchvalidate)
+                    % if validation performance improves, update best network
+                    % and clear validation failure count to allow for up
+                    % down variation
+                    if (msevl < best.msevl)
+                        best.WbWb = WbWb;
+                        best.msevl = msevl;
+                        best.msetst = msetst;
+                        best.msetrn = msetrn;
+                        best.epoch = epoch;
+                        testfail = 0;
+                        % if validation performance got worse, increase 
+                        % failure count and allow for up to max_fail
+                    elseif (msevl > best.msevl)
+                        testfail = testfail + 1;
+                    end                    
+                else
+                    % if performance improved, update best performance
+                    if (msetrn < best.msetrn)
+                        best.msevl = msevl;
+                        best.msetst = msetst;
+                        best.msetrn = msetrn;
+                        best.epoch = epoch;
                     end
-                end          
-                
+                end                
+                                
                 epochtime = toc(tstart);
                                 
                 if printthisepoch
@@ -1556,22 +1636,12 @@ classdef complexnet < handle
             end % while keeptraining
             %----------------E N D    E P O C H    L O O P ----------------
             %--------------------------------------------------------------
-            
-            
-            if epoch>obj.max_fail
-                if kt.fail==0
-                    ind = 1;
-                else
-                    [msevl,ind] = min( msevalidate(epoch-obj.max_fail:epoch) );
-                end
-                fprintf('Scrolling back weights by %d epochs to best at epoch %d\n',...
-                    (obj.max_fail - ind + 1), epoch - obj.max_fail + ind-1);
-                WbWb = obj.WeightsCircularBuffer(:,ind);  %max_fail + 1 buffer
-                obj.Weights = vec_to_Weights(obj,WbWb);
-                msetrn = msetrain(epoch-obj.max_fail + ind-1);
-                msetst = msetest(epoch-obj.max_fail + ind-1);
-                msevl = msevalidate(epoch-obj.max_fail + ind-1);
-            end
+                        
+            fprintf('Scrolling back weights to best at epoch %d\n',best.epoch);
+            obj.Weights = vec_to_Weights(obj, best.WbWb);
+            msetrn = best.msetrn;
+            msetst = best.msetst;
+            msevl = best.msevl;
             
             fprintf('time to train %0.3f sec, exit epoch %d: msetrain %f msetest %f msevalidate %f\n\n',...
                 epochtime,epoch,(msetrn),(msetst),(msevl));

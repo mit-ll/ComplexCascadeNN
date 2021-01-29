@@ -1,5 +1,5 @@
 
-% need weight record check how weights are updated in matlab
+% need worker record to check how weights are updated in matlab
 warning('Move trainlm_editedforweightRecord.m to trainlm.m first');
 pause;
 
@@ -57,17 +57,16 @@ params.hiddenSize = [Hidden_Neurons];
 params.debugPlots=0;
 params.mu = 1e-3;
 params.initFcn = 'nguyen-widrow';
-params.trainFcn = 'trainlm'; params.minbatchsize = numel(trainInd);
-params.batchtype='fixed';
+params.trainFcn = 'trainlm';
+params.batchtype='index';params.trainInd = trainInd;params.valInd = valInd;params.testInd = testInd;
+
 params.layersFcn = 'mytansig';
 params.outputFcn = 'purelin';
 params.initFcn = 'previous';
 params.nbrofEpochs = 300;
 
-weightRecord={};
-weightRecord2={};
-jeRecord={};
-jjRecord={};
+%weightRecord={}; weightRecord2={}; jeRecord={}; jjRecord={};
+workerRecord = {};
 
 net = feedforwardnet( params.hiddenSize );
 
@@ -76,18 +75,23 @@ net = configure(net,in,out);
 net = init(net);
 IW=net.IW; LW=net.LW; b=net.b; % grab the initial values of the weights
 
-net.trainFcn='trainlm';%'traincgf';'traingdx';
-%net.divideFcn='dividerand';
-net.divideFcn='divideind';
-net.divideParam.trainInd=trainInd;
-net.divideParam.valInd=valInd;
-net.divideParam.testInd=testInd;
-net.trainParam.epochs=5
 
+if 0
+    net.trainFcn='trainbr';%'trainlm';%'traincgf';'traingdx';
+    net.divideFcn='dividerand';
+else
+    net.trainFcn= 'trainlm';%'traincgf';'traingdx';
+    net.divideFcn='divideind';net.divideParam.trainInd=trainInd;net.divideParam.valInd=valInd;net.divideParam.testInd=testInd;
+    disp('WARNING! workerRecord will become too large if epochs big');
+    net.trainParam.epochs=200
+end
 net = train(net,in,out);
-length(weightRecord)
+
 
 cnet = complexnet(params);
-cnet = copynet(cnet,net,IW,LW,b,weightRecord,jeRecord,jjRecord,weightRecord2);
+%cnet = copynet(cnet,net,IW,LW,b,weightRecord,jeRecord,jjRecord,weightRecord2);
+cnet = copynet(cnet,net,IW,LW,b,workerRecord);
 cnet.debugCompare = 1
 cnet = cnet.train(in,out);
+
+
