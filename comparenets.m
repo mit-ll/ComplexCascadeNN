@@ -1,6 +1,6 @@
 
 % need worker record to check how weights are updated in matlab
-warning('Move trainlm_editedforweightRecord.m to trainlm.m first');
+warning('Copy trainlm_editedforweightRecord.m to trainlm.m first');
 pause;
 
 rng(101);
@@ -75,7 +75,6 @@ net = configure(net,in,out);
 net = init(net);
 IW=net.IW; LW=net.LW; b=net.b; % grab the initial values of the weights
 
-
 if 0
     net.trainFcn='trainbr';%'trainlm';%'traincgf';'traingdx';
     net.divideFcn='dividerand';
@@ -89,9 +88,11 @@ net = train(net,in,out);
 
 
 cnet = complexnet(params);
-%cnet = copynet(cnet,net,IW,LW,b,weightRecord,jeRecord,jjRecord,weightRecord2);
-cnet = copynet(cnet,net,IW,LW,b,workerRecord);
-cnet.debugCompare = 1
+cnet = copynet(cnet,net,workerRecord,IW,LW,b);
+cnet.debugCompare = 1;
 cnet = cnet.train(in,out);
+
+
+
 
 

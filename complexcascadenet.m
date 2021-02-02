@@ -18,7 +18,7 @@ classdef complexcascadenet < handle
         nbrofInputWeights         
         nbrofBias        
         nbrofWeights
-        totalnbrofParameters
+        nbrofParameters
                 
         inputConnections %'full','firstlast'
         layerConnections %'full','next'
@@ -45,6 +45,8 @@ classdef complexcascadenet < handle
 
         trainFcn     % see options in gradient_descent directory
                      % Hessian-based 'trainlm'=Levenberg-Marquardt
+                     % with Bayesian regularization 'trainbr'
+
               
         % Levenberg-Marquardt parameter for diagonal load to mix Hessian
         % step with gradient step
@@ -53,12 +55,22 @@ classdef complexcascadenet < handle
         mu_dec
         mu_max       % bound the values of the diagonal load
         mu_min
-                     
+
+        % Bayesian-Regularization parameters updated over time
+        beta         % estimate of 1/variance{data} 
+        alpha        % estimate of 1/variance{weights}
+        gamma        % number of good parameter measurements
+                     % between (0, number of weights + biases )        
+                 
         initFcn      % 'randn','nguyen-widrow'
 
         minbatchsize
-        batchtype    %'randperm','fixed'
-        
+        batchtype    %'randperm','fixed','index'
+         
+        % for batchtype 'index' where indices are provided in params
+        trainInd
+        valInd
+        testInd
         nbrofEpochs
         
         % mapminmax
@@ -72,22 +84,14 @@ classdef complexcascadenet < handle
         debugPlots
         printmseinEpochs  % if 1, print every time
         performancePlots
-        
-        
-        % for comparison with MATLAB feedforwardnet output
-        debugCompare
-        weightRecord
-        jeRecord
-        jjRecord        
-        weightRecord2
-        
+                
+        % for comparison with complexnet
+        debugGradient
+        someRecord        
     end
     
     properties (Constant)
-        nbrofEpochsdefault = 1e3; % number of iterations picking a batch each time and running gradient
-        beta1=0.9;         % Beta1 is the decay rate for the first moment
-        beta2=0.999;       % Beta 2 is the decay rate for the second moment
-        
+        nbrofEpochsdefault = 1e3; % number of iterations picking a batch each time and running gradient        
         lrate_default = 1e-2; % initial step size for the gradient        
 
         initial_mu = 1e-3; % Hessian + mu * eye for Levenberg-Marquardt
@@ -108,7 +112,7 @@ classdef complexcascadenet < handle
         msedesired = 0;
         min_grad = 1e-7 / 10; % matlab sets to 1e-7, set lower due to complex
                              % @todo: unclear where this number comes from
-        max_fail = 6;        % allow max_fail steps of increase in 
+        max_fail = 100;        % allow max_fail steps of increase in 
                              % validation data before stopping 
     end        
         
@@ -311,6 +315,13 @@ classdef complexcascadenet < handle
                 obj.batchtype = obj.batchtypedefault;
             end
             
+            switch obj.batchtype
+                case 'index'
+                    obj.trainInd = params.trainInd;
+                    obj.valInd = params.valInd;
+                    obj.testInd = params.testInd;            
+            end
+            
             if isfield(params,'lrate')
                 obj.lrate= params.lrate; 
             else
@@ -443,8 +454,18 @@ classdef complexcascadenet < handle
         end
 
         %----------------------------------------------------------
-        % given an input, determine the network output and intermediate
-        % terms
+        % evaluate the network
+        % given an input, inputaffine mapping (via mapminmax), and layers
+        % (non)linear functions
+        % determine the network output, intermediate terms, and derivative
+        %
+        % in   matrix
+        % out  matrix with same second dimension (samples) as in
+        % n    cell array of nbrofLayers with network values (matrices)
+        %      sensitivity is computed as derror^2/dn
+        % a0   matrix is mapminmax(in)
+        % a    cell array of nbrofLayers with input matrices at each layer
+        % fdot cell array of derivatives of the activation function at f(n)
         function [out,n,a0,a,fdot] = test(obj,in)
             
             [n,a,fdot] = deal(cell(obj.nbrofLayers,1));
@@ -456,23 +477,25 @@ classdef complexcascadenet < handle
                 case 0
                     % gain only
                     %in = bsxfun(@times,in,obj.inputSettings.gain);
+                    % no mapping
+                    a0 = in;
                 otherwise
                     % scale the input
                     ins = mapminmax.apply(obj.dorealifyfn(in),obj.inputSettings);
-                    in = obj.dounrealifyfn(ins);            
+                    a0 = obj.dounrealifyfn(ins);            
             end
             
-            % scaled version of input provided for weight updates
-            a0 = in;
             for layer=1:obj.nbrofLayers                
                 % transfer function
                 transferFcn = obj.layers{layer}.transferFcn;  % string
                 activationfn = @(x) obj.(transferFcn)(x);  % handle
 
-                % weight matrix for input to current layer
+                % weight matrix from input to current layer
                 W=obj.InputWeights{layer};                       
                 if ~isempty(W)
-                    n{layer} = W*in;            % x{n} = W{n}y{n-1}
+                    %---- weight ----
+                    n{layer} = W*a0;
+                    %----------------
                 else
                     n{layer} = [];
                 end
@@ -486,19 +509,32 @@ classdef complexcascadenet < handle
                         if isempty(a{fromlayer})
                             error('test: a{%d} empty for layer weight{%d,%d}\n',...
                                 fromlayer,layer,fromlayer)
-                        elseif isempty(n{layer})                                
-                            n{layer} = W*a{fromlayer};    
+                        elseif isempty(n{layer})
+                            %---- weight ----
+                            n{layer} = W*a{fromlayer};
+                            %----------------
                         else
-                            n{layer} = n{layer} + W*a{fromlayer};     % x{n} = W{n}y{mm}
+                            %---- weight ----
+                            toadd = W*a{fromlayer};
+                            %----------------
+                            if any( size(toadd) ~= size(n{layer}))
+                            error('test: n{%d} from InputWeights{%d} does not match LayerWeights{%d,%d}\n',...
+                                layer,layer,layer,fromlayer);
+                            else
+                                n{layer} = n{layer} + toadd;
+                            end
                         end
                     end
                 end
                 
-                % bias
+                % bias at each layer is needed to move input into different
+                % parts of the nonlinearity
                 b=obj.bias{layer};
                 if ~isempty(b)
                     if ~isempty(n{layer})                        
-                        n{layer} = n{layer} + b;   
+                        %---- bias ----
+                        n{layer} = n{layer} + b;
+                        %----------------
                     else
                         error('test: n{%d} empty but bias{%d} connected\n',layer,layer);
                     end
@@ -513,6 +549,7 @@ classdef complexcascadenet < handle
                 case 0
                     % gain only
                     %out = bsxfun(@rdivide,out_normalized,obj.outputSettings.gain);
+                    %no scaling
                     out=out_normalized;
                 otherwise
                     % network matches to -1,1 but output is back to original scale
@@ -520,44 +557,93 @@ classdef complexcascadenet < handle
                     out = obj.dounrealifyfn(out);
             end
         end
-       
+                
         %------------------------------------------------------------------
-        function obj = copynet(obj,net,IW,LW,b,weightRecord,jeRecord,jjRecord,weightRecord2)            
+        % copy weights from complexnet and initialize connections to make
+        % casacade into plain feedforward
+        % set initFcn to previous to allow for starting weights to be setup
+        % the same was as complexnet        
+        function objcascade = copycomplexnet(objcascade,objcomplex,params)
+            nbrofLayers = objcomplex.nbrofLayers;
+            params.inputConnect = zeros(nbrofLayers,1); params.inputConnect(1) = 1;
+            params.layerConnect = zeros(nbrofLayers,nbrofLayers);
+            for tolayer=2:nbrofLayers, params.layerConnect(tolayer,tolayer-1) = 1; end            
+            params.biasConnect = ones(nbrofLayers,1);
+            
+            objcascade.someRecord = objcomplex.someRecord;
+            
+            objcascade.bias = cell(1,nbrofLayers);
+            for layer = 1:nbrofLayers
+                objcascade.bias{layer} = objcomplex.Weights{layer}(:,end);
+                if layer==1
+                    objcascade.InputWeights{1} = objcomplex.Weights{1}(:,1:end-1);
+                else
+                    objcascade.LayerWeights{layer,layer-1} = objcomplex.Weights{layer}(:,1:end-1);
+                end
+                objcascade.layers{layer} = objcomplex.layers{layer};
+            end
+            objcascade.initFcn = 'previous';
+            fprintf('Initialized obj.initFcn to %s for copied weights to be used as initial weights\n',objcascade.initFcn);
+        end
+        
+        %------------------------------------------------------------------
+        % convert WbWb vectors used in complexnet to bIWLW vectors 
+        % used in complexcascadenet assuming feedforward architecture        
+        function bIWLW = WbWb_to_bIWLW(obj,WbWb)            
+            bIWLW = zeros(size(WbWb));
+            inds = obj.inputweightinds{1};
+            num = length(inds); ii = 1:num;
+            bIWLW(inds,:) = WbWb(ii,:);
+
+            inds = obj.layerbiasinds{1};
+            num = length(inds); ii = ii(end) + (1:num);            
+            bIWLW(inds,:) = WbWb(ii,:);
+            
+            for tolayer = 2:obj.nbrofLayers                   
+                fromlayer = tolayer-1;              
+                inds = obj.layerweightinds{tolayer,fromlayer};
+                num = length(inds); ii = ii(end) + (1:num);
+                bIWLW(inds, :) = WbWb(ii,:);                      
+
+                inds = obj.layerbiasinds{tolayer};
+                num = length(inds); ii = ii(end) + (1:num);                
+                bIWLW(inds,:) = WbWb(ii,:);
+            end            
+        end
+        
+        %------------------------------------------------------------------
+        function obj = copynet(obj,net,workerRecord,IW,LW,b)
             % copy over matlab weights            
 
+            if isempty(obj.Weights)
+                obj.Weights = cell(1,obj.nbrofLayers);
+            end
+            
             if exist('IW','var') && exist('LW','var') && exist('b','var')
-                %these were input directly
+                fprintf('Using input IW,LW,b\n');
+                %already assigned
+            elseif exist('workerRecord','var')
+                fprintf('Using IW,LW,b from workerRecord{1}.WB\n');                
+                % these are the weights in the weight record
+                [b,IW,LW] = separatewb(net,workerRecord{1}.WB);                
             else
-                %get from the net object
+                warning('No workerRecord or IW,LW,b.  Using FINAL weights');
                 IW = net.IW;  % these are the final values of weights
                 LW = net.LW;
                 b = net.b;
             end
-                        
-            if exist('weightRecord','var')
-                % these are the weights in the weight record
-                %[b,IW,LW] = separatewb(net,weightRecord{1});
-                obj.weightRecord=weightRecord;
+              
+            if exist('workerRecord','var')
+                obj.workerRecord = workerRecord;
             end
-            if exist('jeRecord','var')
-                obj.jeRecord=jeRecord;
-            end
-            if exist('jjRecord','var')
-                obj.jjRecord=jjRecord;
-            end
-            if exist('weightRecord2','var')
-                % these are the weights in the weight record
-                %[b,IW,LW] = separatewb(net,weightRecord{1});
-                obj.weightRecord2=weightRecord2;
-            end
+            
             obj.InputWeights = IW;
             obj.LayerWeights = LW;
             obj.bias = b;
-            
             obj.initFcn = 'previous';
             fprintf('Initialized obj.initFcn to %s for copied weights to be used as initial weights\n',obj.initFcn);
         end
-        
+
 
         %------------------------------------------------------------------        
         % Jacobian contain derivatives of all parameters vectorized instead
@@ -685,8 +771,8 @@ classdef complexcascadenet < handle
                 %-----------------------------
                 % complex initializations
                 case 'crandn'
-                    w = 0.001*crandn( nbrofNeurons, nbrofIn );
-                    b = 0.001*crandn( nbrofNeurons, 1);
+                    w = 0.1*crandn( nbrofNeurons, nbrofIn );
+                    b = 0.1*crandn( nbrofNeurons, 1);
                 case 'crands'
                     w = rands( nbrofNeurons, nbrofIn ) + 1i*rands( nbrofNeurons, nbrofIn );      
                     b = rands( nbrofNeurons, 1) + 1i*rands( nbrofNeurons, 1); 
@@ -703,9 +789,12 @@ classdef complexcascadenet < handle
                     
                     %-----------------------------
                     % non-complex initializations
+                case 'rands'
+                    w = rands( nbrofNeurons, nbrofIn );         
+                    b = rands( nbrofNeurons, 1);
                 case 'randn'
-                    w = 0.001*randn( nbrofNeurons, nbrofIn );         
-                    b = 0.001*randn( nbrofNeurons, 1);
+                    w = 0.1*randn( nbrofNeurons, nbrofIn );         
+                    b = 0.1*randn( nbrofNeurons, 1);
                 case 'nguyen-widrow'
                     % borrowed Matlab's implementation of Nguyen-Widrow
                     w = zeros(  nbrofNeurons, nbrofIn );
@@ -771,7 +860,10 @@ classdef complexcascadenet < handle
             nbrOfNeuronsInEachHiddenLayer = obj.hiddenSize;            
             if floor(obj.hiddenSize)~=obj.hiddenSize
                 error('hiddenSize is not an integer');
-            end
+            end            
+            if nbrofOutUnits>1 && any(validatestring(obj.trainFcn,{'trainlm','trainbr'}))            
+                error('complexcascadenet: multiple outputs not supported');
+            end            
             
             % allocate space for gradients
             % sensitivity{n} = dcost/da{n} vector of dimension a{n}
@@ -786,34 +878,47 @@ classdef complexcascadenet < handle
             [sensitivity,stateIW,DeltaIW,stateb,Deltab] = deal(cell(obj.nbrofLayers,1));
             [stateLW,DeltaLW] = deal(cell(obj.nbrofLayers,obj.nbrofLayers));            
                         
-            switch obj.minbatchsize
-                case 'full'
-                    % all samples used for training
-                    nbrofSamplesinBatch = nbrofSamples;
-                    nbrofSamplesinTest = 0;
-                case 'split70_15_15'
-                    % 70% of samples used for training
-                    % consistent with matlab
-                    nbrofSamplesinBatch =  floor( 0.7 * nbrofSamples);                                    
-                    nbrofSamplesinTest = floor( 0.15 * nbrofSamples);                                    
-                case 'split90_10'
-                    nbrofSamplesinBatch =  floor( 0.9 * nbrofSamples);                                    
-                    nbrofSamplesinTest = 0;                                                   
-                case 'split70_30'
-                    nbrofSamplesinBatch =  floor( 0.7 * nbrofSamples);                                    
-                    nbrofSamplesinTest = 0;                                                                       
-                otherwise
-                    % pick batch size number of sample if possible
-                    nbrofSamplesinBatch =  max(obj.batchsize_per_feature*nbrofInUnits,obj.minbatchsize);
-                    nbrofSamplesinBatch =  min(nbrofSamplesinBatch,nbrofSamples); 
-                    % testing and validation each get 1/2 of the remainder                    
-                    % when remainder = 0 (e.g. params.minbatchsize =inf), then there is
-                    % no test or validate data
-                    nbrofSamplesinTest = floor( 1/2 * (nbrofSamples - nbrofSamplesinBatch) );                                  
-            end            
-            nbrofSamplesinValidate = nbrofSamples - nbrofSamplesinBatch - nbrofSamplesinTest;
+            switch obj.trainFcn
+                case {'trainlm','trainbr'}
+                    obj.alpha = 0; obj.beta = 1/2;
+                    obj.mu = obj.initial_mu;                    
+            end
             
-            
+             switch obj.batchtype
+                case {'randperm','fixed'}
+                    switch obj.minbatchsize
+                        case 'full'
+                            % all samples used for training
+                            nbrofSamplesinBatch = nbrofSamples;
+                            nbrofSamplesinTest = 0;
+                        case 'split70_15_15'
+                            % 70% of samples used for training
+                            % consistent with matlab
+                            nbrofSamplesinBatch =  floor( 0.7 * nbrofSamples);
+                            nbrofSamplesinTest = floor( 0.15 * nbrofSamples);
+                        case 'split90_10'
+                            nbrofSamplesinBatch =  floor( 0.9 * nbrofSamples);
+                            nbrofSamplesinTest = 0;
+                        case 'split70_30'
+                            nbrofSamplesinBatch =  floor( 0.7 * nbrofSamples);
+                            nbrofSamplesinTest = 0;
+                        otherwise
+                            % pick batch size number of sample if possible
+                            nbrofSamplesinBatch =  max(obj.batchsize_per_feature*nbrofInUnits,obj.minbatchsize);
+                            nbrofSamplesinBatch =  min(nbrofSamplesinBatch,nbrofSamples);
+                            % testing and validation each get 1/2 of the remainder
+                            % when remainder = 0 (e.g. params.minbatchsize =inf), then there is
+                            % no test or validate data
+                            nbrofSamplesinTest = floor( 1/2 * (nbrofSamples - nbrofSamplesinBatch) );
+                    end
+                    nbrofSamplesinValidate = nbrofSamples - nbrofSamplesinBatch - nbrofSamplesinTest;
+                    
+                case 'index'
+                    nbrofSamplesinBatch = length(obj.trainInd);
+                    nbrofSamplesinTest = length(obj.testInd);
+                    nbrofSamplesinValidate = length(obj.valInd);                    
+            end
+          
             % -------------------------------------------------------------
             % the input (row1) and output (row2) dimensions at each layer
             % weights{layer} has dimension output x input 
@@ -871,6 +976,13 @@ classdef complexcascadenet < handle
                             all( isempty(obj.InputWeights) )
                         error('change obj.initFcn=%s, since previous weights are empty',obj.initFcn);
                     end
+                    for layer=1:obj.nbrofLayers                        
+                        DeltaIW{layer} = zeros(size(obj.InputWeights{layer}));
+                        Deltab{layer} = zeros(size(obj.bias{layer}));                        
+                        for fromlayer = 1:layer-1
+                            DeltaLW{layer,fromlayer} = zeros(size(obj.LayerWeights{layer,fromlayer}));
+                        end                        
+                    end
                 otherwise
                     for layer=1:obj.nbrofLayers
                         % ---------------------------------------------------------
@@ -912,15 +1024,15 @@ classdef complexcascadenet < handle
                 end
                 obj.nbrofWeights(layer) = num;
             end
-            obj.totalnbrofParameters = sum(obj.nbrofWeights+obj.nbrofBias);
+            obj.nbrofParameters = sum(obj.nbrofWeights+obj.nbrofBias);
             
             switch obj.trainFcn
-                case 'trainlm'
-                    Jac = zeros(obj.totalnbrofParameters,nbrofSamplesinBatch);
+                case {'trainlm','trainbr'}
+                    Jac = zeros(obj.nbrofParameters,nbrofSamplesinBatch);
                     % Hessian and Jac*error are derived from Jac and don't
                     % need to be pre allocated
-                    %Hessian = zeros(totalnbrofParameters,totalnbrofParameters);
-                    %jace = zeros(totalnbrofParameters,1);                                        
+                    %Hessian = zeros(nbrofParameters,nbrofParameters);
+                    %jace = zeros(nbrofParameters,1);                                        
                     [sensitivityf] = deal(cell(obj.nbrofLayers,1));                                        
                     [JacIW, Jacb] = deal(cell(obj.nbrofLayers,1));
                     [JacLW] = deal(cell(obj.nbrofLayers,obj.nbrofLayers));                   
@@ -939,12 +1051,12 @@ classdef complexcascadenet < handle
             % Jacobian calculations in the LM case
             [obj] = getlayerinds(obj);                    
             
-            % setup a circular buffer for storing past max_fail weights so
+            % setup a FIFO buffer for storing past max_fail weights so
             % that we can scroll back when validate data mse increases
             bIWLW = Weights_to_vec(obj,obj.bias,obj.InputWeights,obj.LayerWeights);
             obj.WeightsBuffer = zeros(numel(bIWLW),obj.max_fail+1);                    
             obj.WeightsBuffer(:,1) = bIWLW;
-
+       
             % update the weights over the epochs
             [msetrain,msetest,msevalidate] = deal(-1*ones(1,obj.nbrofEpochs));
             %lrate = obj.lrate;
@@ -953,12 +1065,24 @@ classdef complexcascadenet < handle
             epoch = 0; 
             keeptraining = 1; 
             testfail = 0;
-            tstart = tic;
+            tstart = tic;            
+            
+            % initializing mse to inf even though not true, first step            
+            % always takes place
+            [best.msetst,best.msetrn,best.msevl,best.perftrn] = deal(Inf);
+            best.bIWLW=bIWLW;
+            
+            % Regularization parameters needed for trainlm and trainbr
+            totalnbrofParameters = (2-isreal(bIWLW))*obj.nbrofParameters;
+            obj.gamma = totalnbrofParameters;
+            
+            %--------------S T A R T    E P O C H    L O O P --------------
+            %--------------------------------------------------------------
             while keeptraining
                 epoch=epoch+1;                
                 printthisepoch = (epoch/obj.printmseinEpochs == floor(epoch/obj.printmseinEpochs));
                 
-                % pick a batch for this epoch for training or keep it fixed
+                 % pick a batch for this epoch for training or keep it fixed
                 % throughout (@todo: could pull fixed out of the loop but
                 % more readable to do it here)
                 switch obj.batchtype
@@ -966,10 +1090,17 @@ classdef complexcascadenet < handle
                         batchtrain = randperm(nbrofSamples,nbrofSamplesinBatch);
                     case 'fixed'
                         batchtrain = 1:nbrofSamplesinBatch;                        
+                    case 'index'
+                        batchtrain = obj.trainInd; nbrofSamplesinBatch = length(obj.trainInd);
+                        batchtest = obj.testInd; nbrofSamplesinTest = length(obj.testInd);
+                        batchvalidate = obj.valInd; nbrofSamplesinValidate = length(obj.valInd);
                 end                
-                batchleft = setdiff(1:nbrofSamples,batchtrain);                
-                batchtest = batchleft(1:nbrofSamplesinTest);                
-                batchvalidate = batchleft(nbrofSamplesinTest + (1:nbrofSamplesinValidate));
+                switch obj.batchtype
+                    case {'randperm','fixed'}
+                        batchleft = setdiff(1:nbrofSamples,batchtrain);
+                        batchtest = batchleft(1:nbrofSamplesinTest);
+                        batchvalidate = batchleft(nbrofSamplesinTest + (1:nbrofSamplesinValidate));
+                end
                 
                 % training, testing, and validation
                 trn_normalized = out_normalized(:,batchtrain);
@@ -980,13 +1111,15 @@ classdef complexcascadenet < handle
                 vl = out(:,batchvalidate);
                 
                 
-                if 0%epoch/10 == floor(epoch/10)
+                % teacher error is a form of randomization instead of using
+                % different training/testing/validation at each epoch
+                if 0 %epoch/10 == floor(epoch/10)
                     %----------------------------------------------------------
                     % introduce teacher error at 10 x smallest number
                     % "Proposal of relative-minimization learning for behavior
                     % stabilization of complex-valued recurrent neural
                     % networks" by Akira Hirose, Hirofumi Onishi
-                    teachererrorsize = 1e8*eps;
+                    teachererrorsize = 1e4*eps;
                     teachererror = teachererrorsize*(2*rand(size(in(:,batchtrain)))-1);
                     if any(imag(in(:)))
                         teachererror = teachererror + ...
@@ -1007,7 +1140,28 @@ classdef complexcascadenet < handle
                 % not taking 1/2 of the square 
                 % normalized would be y{obj.nbrofLayers} - out_normalized
                 msecurr = mean( abs(curr(:)-trn(:)).^2 );
-                       
+                Ew = (bIWLW'*bIWLW);
+                Ed = msecurr*1;%nbrofSamplesinBatch;
+                
+                if epoch==1
+                    switch obj.trainFcn
+                        case 'trainbr'
+                            if Ew < 100*eps
+                                obj.alpha = 1;
+                            else
+                                obj.alpha = obj.gamma/(2 * Ew);
+                            end
+                            obj.beta = (nbrofSamplesinBatch - obj.gamma)/(2 * Ed);
+                            if (obj.beta<=0), obj.beta = 1/2; end
+                    end
+                end                
+                perfcurr = obj.beta*Ed + obj.alpha*Ew;
+                
+                if epoch==1
+                    best.msetrn = msecurr;
+                    best.perftrn =  perfcurr;
+                end
+                
                 if obj.debugPlots && printthisepoch                                        
                     figure(901);clf;
                     subplot(211)
@@ -1091,6 +1245,7 @@ classdef complexcascadenet < handle
                                     LW_sensitivityf.imag = LW_sensitivityf.imag + ...
                                         (  (imag(LWtolayer).' * real(sftolayer)) +...
                                         -1*(real(LWtolayer).' * imag(sftolayer)) );
+                                    
                                 else
                                     LW_sensitivity = LW_sensitivity + ...
                                         ( LWtolayer.' * stolayer);
@@ -1173,11 +1328,12 @@ classdef complexcascadenet < handle
                 % update all the weight matrices (including bias weights)
                 %
                 switch obj.trainFcn
-                    case 'trainlm'
+                    case {'trainlm','trainbr'}
                         % convert jacobian matrix portions into big matrix
                         Jac = Weights_to_vec(obj,Jacb,JacIW,JacLW);
                         Jac = Jac / sqrt(nbrofSamplesinBatch);
                         Hessian = (Jac*Jac');
+                        ee = eye(size(Hessian));
                         
                         % Use the gradient way of calculating 
                         % jace = Jacobian * error, since this propagates 
@@ -1192,29 +1348,61 @@ classdef complexcascadenet < handle
                         % this line works for real and complex case:
                         jace = Weights_to_vec(obj,Deltab,DeltaIW,DeltaLW);                                                
                         
+                        % to match MATLAB's calculations and use of mu, 
+                        % include the 1/2 scaling - this is included in
+                        % beta now
+                        %Hessian = Hessian/2;
+                        %jace = jace/2; 
                         
                         %--------------------------------------------------
                         %        D E B U G with MATLAB jacobian
                         % this is mostly code for deep numerical dive
                         %--------------------------------------------------                        
-                        if obj.debugCompare
-                            debug_lm(obj,Jac,jace,Hessian,matlablayerweightinds,matlablayerbiasinds);
-                        end               
+                        %if obj.debugCompare
+                        %    debug_lm(obj,Jac,jace,Hessian,matlablayerweightinds,matlablayerbiasinds);
+                        %end
                         
-                        trn = out(:,batchtrain);
-                        msetrn = inf; numstep = 1;
-                        ee = eye(size(Hessian));
-
+                        if obj.debugGradient
+                            jacetocompare = WbWb_to_bIWLW(obj,obj.someRecord(epoch).jace);
+                            Jactocompare = WbWb_to_bIWLW(obj,obj.someRecord(epoch).Jac);
+                            fprintf('epoch %d ||gradient complexnet - gradient complexcascadenet|| %f\n',...
+                                epoch,norm(jacetocompare - jace));
+                            fprintf('epoch %d ||Jacobian complexnet - Jacobian complexcascadenet|| %f\n',...
+                                epoch,norm(Jactocompare - Jac));
+                        end                        
+                        
+                        % current weights
+                        bIWLW = Weights_to_vec(obj,obj.bias,obj.InputWeights,obj.LayerWeights);        
+                        totalnbrofParameters = (2-isreal(bIWLW))*obj.nbrofParameters;                        
+                        Ew = (bIWLW'*bIWLW);                        
+                        Ed = msecurr * 1;%nbrofSamplesinBatch;                                                
+                        perfcurr = obj.beta * Ed + obj.alpha * Ew;                                                
+                            
                         % generally, QR decomposition has better behavior
                         % than computing Hessian via Jac*Jac'
-                        USEQR = 1; 
+                        USEQR = 0; 
                         % fast update is rank one updates to base qr(Jac')
                         FAST_UPDATE = 0;
                         if USEQR && FAST_UPDATE,  R = qr(Jac'); end
-                        while (msetrn>msecurr) && (obj.mu<obj.mu_max)                            
-                            % Levenberg Marquardt                            
-                            Hblend = Hessian + obj.mu*ee;
-                            %Hblend = Hessian + (obj.mu*diag(diag(Hessian)));
+                        
+                        trn = out(:,batchtrain);
+                        msetrn = inf; perftrn=inf; numstep = 1;
+                        while (perftrn>perfcurr) && (obj.mu<obj.mu_max)                                                    
+
+                            if printthisepoch
+                                % for debugging the LM optimization of loading
+                                fprintf('epoch %d numstep %d mu %0.5f+alpha %0.5f\n',...
+                                    epoch,numstep,obj.mu,obj.alpha);
+                            end
+                            
+                            fprintf('epoch %d numstep %d mu %0.5f+alpha %0.5f\n',...
+                                epoch,numstep,obj.mu,obj.alpha);
+                            
+                            % include Bayesian Regularization
+                            mua = obj.mu + obj.alpha;
+                                                        
+                            % loading the Hessian and regularizing
+                            Hblend = obj.beta*Hessian + mua*ee;
                             
                             if isnan(rcond(Hblend))
                                 error('Condition number of blended Hessian is nan.  What did you do?');
@@ -1224,77 +1412,69 @@ classdef complexcascadenet < handle
                             % Blended Newton / Gradient 
                             % (i.e. LevenBerg-Marquardt)                            
                             if USEQR==0
-                                bIWLW = Hblend\jace;
+                                deltabIWLW = Hblend\(obj.beta*jace + obj.alpha*bIWLW);
                             else
                                 % use qr decomposition instead of Hessian which
                                 % is obtained by squaring
                                 if FAST_UPDATE
-                                    R1 = triu(qrupdate_al( R, sqrt(obj.mu)));
+                                    R1 = triu(qrupdate_al( R, sqrt(mua)));
                                 else
-                                    Jact = [Jac sqrt(obj.mu)*eye(obj.totalnbrofParameters)]';
+                                    Jact = [sqrt(obj.beta)*Jac sqrt(mua)*eye(obj.nbrofParameters)]';
                                     R1 = triu(qr(Jact,0));
                                 end                                
-                                bIWLW = R1\(R1'\jace);                                                                                                
+                                deltabIWLW = R1\(R1'\(obj.beta*jace + obj.alpha*bIWLW));                                                                                                
                                 % find extra step e based on residual error r
                                 % does not generally help
-                                %r = jace - Hblend*WbWb;
+                                %r = (obj.beta*jace + obj.alpha*WbWb) - Hblend*deltaWbWb;
                                 %e = R1\(R1'\r);                               
                             end
                             %----------------------------------------------                            
-                                                        
-                            % convert vector to Weights and update
-                            [Deltab,DeltaIW,DeltaLW] = vec_to_Weights(obj,bIWLW);                            
+                            
+                            % convert vector to Weights and step in
+                            % negative gradient direction
+                            [Deltab,DeltaIW,DeltaLW] = vec_to_Weights(obj,deltabIWLW);                            
                             obj = updateWeights(obj,Deltab, DeltaIW, DeltaLW, -1);
-                            
+                            bIWLW = bIWLW - deltabIWLW;
+                                                        
+                            % Check the mse for the update
                             curr = obj.test( in(:,batchtrain) );                            
-                            % Check the mse for the update
                             msetrn = mean( abs(curr(:)-trn(:)).^2 );
-                            if printthisepoch
-                                fprintf('mu %e msetrn %e\n',obj.mu,msetrn);
-                            end
+                            Ew = (bIWLW'*bIWLW);
+                            Ed = msetrn * 1;%nbrofSamplesinBatch;          
+                            perftrn = obj.beta * Ed + obj.alpha * Ew;                            
                             
-                            %{
-                            % trying out the residual step, generally
-                            % doesn't help
-                            ErrorW = vec_to_Weights(obj,e);
-                            for nn=1:obj.nbrofLayers                              
-                                obj.Weights{nn} = obj.Weights{nn} - ErrorW{nn};
-                            end
-                            curre = obj.test( in(:,batchtrain) );
-                            % Check the mse for the update
-                            msetrne = mean( abs(curre(:)-trn(:)).^2 );
-                            fprintf('mu %e msetrn(with error step) %e\n',mu,msetrne);
-                            ErrorW = vec_to_Weights(obj,e);
-                            for nn=1:obj.nbrofLayers                              
-                                obj.Weights{nn} = obj.Weights{nn} + ErrorW{nn};
-                            end
-                            %}                            
-                            
-                            if isnan(msetrn)
-                                any(isnan(obj.Weights{1}))
-                                any(isnan(objnew.Weights{1}))
+                            if isnan(deltabIWLW)
+                                warning('epoch %d deltabIWLW has nan values',epoch);
                             end
                             numstep=numstep+1;                            
 
-                            if msetrn>msecurr
+                            % incorrect comparison: msetrn>msecurr 
+                            % instead, looking for best so far 
+                            %if msetrn>best.msetrn
+                            %if perftrn>best.perftrn  
+                            if perftrn>perfcurr                                
                                 obj.mu=obj.mu*obj.mu_inc; % pad the Hessian more
-                                % undo the weight step by adding                                
-                                obj = updateWeights(obj, Deltab, DeltaIW, DeltaLW, +1);                                
+                                % undo the weight step
+                                obj = updateWeights(obj,Deltab, DeltaIW, DeltaLW, +1);
+                                bIWLW = bIWLW - deltabIWLW;
                             else
                                 % as mu decreases, becomes Newton's method
                                 obj.mu = max(obj.mu * obj.mu_dec,obj.mu_min);
                             end
                         end
                         
-                        %{
-                        % switch to slow gradient at the end
-                        if obj.mu>=obj.mu_max
-                            newtrainFcn = 'Adadelta';
-                            warning('Switching from %s to %s\n',obj.trainFcn);
-                            obj.trainFcn = newtrainFcn;
-                            obj.mu=0;
-                        end 
-                        %}
+                        % Regularization update for gamma, beta, alpha
+                        switch obj.trainFcn
+                            case 'trainbr'                                
+                                obj.gamma = totalnbrofParameters - obj.alpha*trace( inv(obj.beta*Hessian + obj.alpha*ee) );
+                                if Ew < 100*eps
+                                    obj.alpha = 1;
+                                else
+                                    obj.alpha = obj.gamma/(2 * Ew);
+                                end
+                                obj.beta = (nbrofSamplesinBatch - obj.gamma)/(2 * Ed);
+                                if (obj.beta<=0), obj.beta = 1/2; end
+                        end              
                     otherwise
                         thegradientfunction = str2func(obj.trainFcn);
                         try
@@ -1341,29 +1521,47 @@ classdef complexcascadenet < handle
                 msetrain(epoch)= msetrn;
                 msetest(epoch) = msetst;
                 msevalidate(epoch) = msevl;
-
-                %if (epoch>max_fail)
-                %    msemin = min(msetest(1: epoch-max_fail) );
-                %    if msetst > msemin + eps
-                %        testfail = max_fail;
-                %    end
-                %end
+                                
+                Ew = (bIWLW'*bIWLW);
+                Ed = msetrn * 1;%nbrofSamplesinBatch;                        
+                perftrn = obj.beta * Ed + obj.alpha * Ew;
                 
-                if epoch>1 
-                    if msevl > msevalidate(epoch-1) + eps
-                        testfail = testfail + 1;   % count fail to decrease
-                    else
-                        % reset to zero, allowing for up down fluctuation
-                        % primarily at the beginning of training
-                        testfail = 0;              
+                if numel(batchvalidate)
+                    % if validation performance improves, update best network
+                    % and clear validation failure count to allow for up
+                    % down variation
+                    if (msevl < best.msevl)                    
+                        best.bIWLW = bIWLW;
+                        best.msevl = msevl;
+                        best.msetst = msetst;
+                        best.msetrn = msetrn;                        
+                        best.perftrn = perftrn;                                        
+                        best.epoch = epoch;
+                        testfail = 0;
+                        % if validation performance got worse, increase 
+                        % failure count and allow for up to max_fail
+                    elseif (msevl > best.msevl)                    
+                        testfail = testfail + 1;
+                    end                    
+                else
+                    % if performance improved, update best performance
+                    if (msetrn < best.msetrn)                    
+                        best.bIWLW = bIWLW;
+                        best.msevl = msevl;
+                        best.msetst = msetst;
+                        best.msetrn = msetrn;                        
+                        best.perftrn = perftrn;                        
+                        best.epoch = epoch;                        
                     end
-                end          
-                
+                end                
+
                 epochtime = toc(tstart);
                                 
                 if printthisepoch
                     fprintf('epoch %d: msetrain %f msetest %f msevalidate %f grad %e\n',...
                         epoch,(msetrn),(msetst),(msevl),gradientacc);
+                    fprintf('epoch %d: gamma %0.3f mu %0.5f alpa %0.3f, beta %0.3f, Ed %0.3f Ew %0.3f\n',...
+                        epoch,obj.gamma,obj.mu,obj.alpha,obj.beta,Ed,Ew);                                                                 
                 end                                
                 
                 kt.epoch = (epoch < obj.nbrofEpochs);
@@ -1375,21 +1573,14 @@ classdef complexcascadenet < handle
                 keeptraining = all( struct2array(kt) );
                 
             end % while keeptraining
-
-            if epoch>obj.max_fail
-                if kt.fail==0
-                    ind = 1;
-                else
-                    [msevl,ind] = min( msevalidate(epoch-obj.max_fail:epoch) );
-                end
-                fprintf('Scrolling back weights by %d epochs to best at epoch %d\n',...
-                    (obj.max_fail - ind + 1), epoch - obj.max_fail + ind-1);
-                bIWLW = obj.WeightsBuffer(:,ind);  %max_fail + 1 buffer
-                [obj.bias,obj.InputWeights,obj.LayerWeights] = vec_to_Weights(obj,bIWLW);
-                msetrn = msetrain(epoch-obj.max_fail + ind-1);
-                msetst = msetest(epoch-obj.max_fail + ind-1);
-                msevl = msevalidate(epoch-obj.max_fail + ind-1);
-            end
+            %----------------E N D    E P O C H    L O O P ----------------
+            %--------------------------------------------------------------
+                        
+            fprintf('Scrolling back weights to best at epoch %d\n',best.epoch);
+            [obj.bias,obj.InputWeights,obj.LayerWeights] = vec_to_Weights(obj,best.bIWLW);
+            msetrn = best.msetrn;
+            msetst = best.msetst;
+            msevl = best.msevl;
             
             fprintf('time to train %0.3f sec, exit epoch %d: msetrain %f msetest %f msevalidate %f\n\n',...
                 epochtime,epoch,(msetrn),(msetst),(msevl));
@@ -1402,10 +1593,10 @@ classdef complexcascadenet < handle
                 semilogy(msetest(1:epoch),'r+-','MarkerSize',4);
                 semilogy(msevalidate(1:epoch),'go-','MarkerSize',4);
                 semilogy(1:epoch,msevl*ones(1,epoch),'.','MarkerSize',4)
-                legend('train (for determining weights)',...
+                 legend('train (for determining weights)',...
                     'test (for reporting performance)',...
-                    'validate (exit on 6 consequetive increases)',...
-                    'optimal weights','FontSize',18,'FontWeight','bold'); 
+                    sprintf('validate (exit on %d increases from best)',obj.max_fail),...
+                    'optimal weights','FontSize',18,'FontWeight','bold');
                 grid minor;
                 xlabel('epoch','FontSize',18,'FontWeight','bold');
                 ylabel('mean-squared error','FontSize',18,'FontWeight','bold');

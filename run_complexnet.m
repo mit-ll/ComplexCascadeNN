@@ -2,6 +2,7 @@
 
 addpath ./gradient-descent/
 
+realifyfn = @(x) [real(x); imag(x)];
 
 %% check for single complex layer
 params =[];
@@ -16,25 +17,66 @@ x=randn(1,100)+1i*randn(1,100);
 cnet = cnet.train(x,x*(3+5*1i) + (4-2*1i));
 print(cnet)
 
+
+
 %% check for single hidden real layer
 
 params=[];
-params.hiddenSize=[1];
+params.hiddenSize=[2 2 1];
+%params.hiddenSize = [1];
 params.layersFcn='purelin';
 params.outputFcn='purelin';
 params.trainFcn='trainlm';'RAdam';
 params.initFcn='nguyen-widrow';
+params.domap = 0;
 cnet = complexnet(params);
 x=randn(1,100);
 %cnet.trainsingle(x,3*x+2);
-cnet = cnet.train(x,3*x + 2);
+cnet = cnet.train([x;2*x],3*x + 2);
 print(cnet);
-aaa=cnet.test(x);
+aaa=cnet.test([x;2*x]);
 figure(1);plot(aaa,3*x+2);
 xlabel('input'); ylabel('output');
 %net = feedforwardnet(params.hiddenSize);
 %net = train(net,x,3*x + 2)
 
+
+net = cascadeforwardnet(params.hiddenSize);
+net = train(net,[x;2*x],3*x + 2);
+net.IW
+net.LW
+net.b
+
+canet = complexcascadenet(params);
+canet = canet.train([x;2*x],3*x + 2);
+
+
+% checking that canet computes the same thing as cnet
+nbrofLayers = cnet.nbrofLayers;
+params.inputConnect = zeros(nbrofLayers,1); params.inputConnect(1) = 1;
+params.layerConnect = zeros(nbrofLayers,nbrofLayers); 
+for tolayer=2:nbrofLayers, params.layerConnect(tolayer,tolayer-1) = 1; end
+params.biasConnect = ones(nbrofLayers,1);
+canet = complexcascadenet(params);
+canet.bias = cell(1,nbrofLayers);
+for layer = 1:nbrofLayers
+    canet.bias{layer} = cnet.Weights{layer}(:,end);
+    if layer==1
+        canet.InputWeights{1} = cnet.Weights{1}(:,1:end-1);
+    else
+        canet.LayerWeights{layer,layer-1} = cnet.Weights{layer}(:,1:end-1);
+    end
+    canet.layers{layer} = cnet.layers{layer};
+end
+outa = canet.test([x;2*x]);
+norm(aaa - outa)
+
+
+% adding an extra term
+canet.InputWeights{end} = [1 1];
+norm(aaa - (outa - x - 2*x))
+
+%canet = canet.train([x;2*x],3*x + 2);
 
 %% check for pure phase output function
 
@@ -140,12 +182,14 @@ print(cnet)
 
 % ellipse
 % I
-rot = pi/3; R = [cos(rot) -sin(rot); sin(rot) cos(rot)];
+rot = pi/1000000; 
+rot = pi/4;
+R = [cos(rot) -sin(rot); sin(rot) cos(rot)];
 R = diag([0.5 0.3])*R;
 
-num = 2;
-ini1 = linspace(-0.945,0.945,7*num); inr1 = zeros(size(ini1));
-inr2 = linspace(-0.2,0.2,2*num); ini2 = 0.95*ones(size(inr2));
+num = 1;
+ini1 = linspace(-0.945,0.945,round(7*num)); inr1 = zeros(size(ini1));
+inr2 = linspace(-0.2,0.2,round(2*num)); ini2 = 0.95*ones(size(inr2));
 inr3 = inr2; ini3=-ini2;
 shapeI=[inr1 inr2 inr3] + 1i*[ini1 ini2 ini3];
 
@@ -160,25 +204,119 @@ y= R * [real(shapeO); imag(shapeO)];
 shapeOrotated = y(1,:) + 1i*y(2,:);
 
 params = [];
-params.nbrofEpochs=200;
-params.hiddenSize=[1 2 2];
-params.domap=0;
-params.layersFcn='sigrealimag2'; params.outputFcn='purelin';
-% this example prefers crandn to nguyen-widrow, why?
-params.initFcn='crandn';'c-nguyen-widrow';
-params.minbatchsize=inf; params.batchtype = 'fixed';
-params.trainFcn = 'trainlm';
 
-cnet = complexnet(params);
+%-------------------------------------------------------------------------
+% best if no mapminmax since I is not symmetric
+% but complex also has decent performance
+params.hiddenSize=[1 2 2]; params.domap=0;
+
+params.hiddenSize=2*[1 2]; %[1 2 2];
+
+%params.domap='complex';
+params.domap='reim';
+%-------------------------------------------------------------------------
+
+
+params.layersFcn='sigrealimag2'; params.outputFcn='purelin';
+
+if 0
+    params.minbatchsize='split90_10'; 
+    params.batchtype = 'randperm';
+else
+    params.minbatchsize='split90_10'; 
+    params.minbatchsize='full'; 
+    params.batchtype = 'fixed';
+end
+
+params.debugPlots = 0; params.performancePlots = 1;
+
+
+if 1
+    % this example prefers crandn to nguyen-widrow, @todo: why?
+    params.initFcn = 'crandn';'c-nguyen-widrow';
+    params.trainFcn = 'trainlm'; params.nbrofEpochs=2000;
+else
+    params.initFcn='crandn';
+    params.trainFcn = 'trainbr'; params.nbrofEpochs=2000;
+end
+
+%params.trainFcn = 'Adam2'; params.nbrofEpochs=5000;
+
+net = feedforwardnet( params.hiddenSize);
+%net = cascadeforwardnet( params.hiddenSize);
+realifyfn = @(x) [real(x); imag(x)];
+DOPARTICULAR = 1;
+if DOPARTICULAR
+    net = configure(net,realifyfn(shape),realifyfn(shaperotated));
+    net.initFcn = 'initlay';
+    [dim1,dim2] = size(net.inputWeights);
+    for ii= 1:dim1
+        for jj=1:dim2
+            net.inputWeights{ii,jj}.initFcn = 'rands';
+        end
+    end
+    [dim1,dim2] = size(net.inputWeights);
+    for ii= 1:dim1
+        for jj=1:dim2
+            net.layerWeights{ii,jj}.initFcn = 'rands';
+        end
+    end
+    [dim1] = length(net.biases);
+    for ii=1:dim1, net.biases{ii}.initFcn = 'rands'; end
+    net = init(net);
+    
+    for ii=1:length(net.layers)
+        net.layers{ii}.transferFcn='tansig';
+    end
+end
+net = train(net,realifyfn(shape),realifyfn(shaperotated));
+outOr =net(realifyfn(shapeO)); outOr=outOr(1,:)+1i*outOr(2,:);
+
+if 0
+    cnet = complexnet(params);
+elseif 1
+    if 0
+        params.inputConnect = [1;0;0];
+        params.layerConnect = zeros(3,3);
+        params.layerConnect(2,1) = 1;
+        params.layerConnect(3,2) = 1;
+        params.biasConnect = [1;1;1;];
+    end
+    cnet = complexcascadenet(params);
+else
+    % create complexnet and run for a few iterations, 
+    % saving gradient and Jacobian in anet.someRecord
+    anet = complexnet(params);
+    anet.debugGradient = 1;
+    anet = anet.train(shape,shaperotated);   
+
+    % create complexcascadenet and copy from complexnet
+    params.inputConnect = [1;0;0];
+    params.layerConnect = zeros(3,3); 
+    params.layerConnect(2,1) = 1;
+    params.layerConnect(3,2) = 1;
+    params.biasConnect = [1;1;1;];
+    cnet = complexcascadenet(params);
+    cnet = copycomplexnet(cnet,anet,params);    
+    cnet.debugGradient = 1;    
+end
+    
+    
 cnet = cnet.train(shape,shaperotated);
 outhat = cnet.test(shape);
 outO = cnet.test(shapeO);
 %print(cnet)
 
-net = feedforwardnet( 2* params.hiddenSize);
-realifyfn = @(x) [real(x); imag(x)];
-net = train(net,realifyfn(shape),realifyfn(shaperotated));
-outOr =net(realifyfn(shapeO)); outOr=outOr(1,:)+1i*outOr(2,:);
+cnet.inputSettings.gain
+cnet.outputSettings.gain
+
+net.inputs{1}.processSettings{1}.gain
+net.outputs{end}.processSettings{1}.gain
+
+
+norm( shapeOrotated - outO).^2
+norm( shapeOrotated - outOr).^2
+
 
 figure(123);clf;
 plot(shape,'.','MarkerSize',12); hold on;
@@ -198,7 +336,7 @@ grid minor; grid;
 %% nonlinear volterra series
 % y(t) = x(t) + sum beta * x(t-k) x(t-l)
 
-choice = 'simple';
+choice = 'many';%'simple';
 switch choice
     case 'simple'        
         xt = randn(1,10000) + 1i*randn(1,10000);
@@ -270,26 +408,27 @@ params.hiddenSize = [];
 params.layersFcn = 'purelin';params.outputFcn='purelin';
 params.trainFcn = 'Adam2';
 params.initFcn = 'nguyen-widrow';
-params.nbrofEpochs = 300;
-params.minbatchsize = numel(traininds)/10;
+params.minbatchsize = 'split70_15_15'; 
 net = complexnet(params);
 net = net.train(inpast,out);
 outlinear1 = net.test(inpast1);
 
 % non-linear predictor
 params = [];
-params.domap = 1;
+params.domap = 'complex';
 %params.hiddenSize = [16 6 4];
 params.hiddenSize = [16 6 4];  % wrks for ~7k weights
 params.debugPlots=0;
-params.mu = 1e-3;
-params.trainFcn = 'trainlm'; params.minbatchsize = round(numel(traininds)*0.7);
 params.batchtype='fixed';
+params.minbatchsize = 'split70_15_15';
+params.mu = 1e-3; params.trainFcn = 'trainlm'; params.nbrofEpochs = 300; 
+%params.trainFcn = 'Adam2'; params.nbrofEpochs = 5000;
+
 if any(imag(inpast(:)))
     params.initFcn = 'crandn'; 'c-nguyen-widrow';
     params.layersFcn = 'sigrealimag2';'cartrelu';'satlins'; 
 else
-    params.initFcn = 'nguyen-widrow';'randn';
+    params.initFcn = 'randn';'nguyen-widrow';
     params.layersFcn = 'mytansig'; %'mytanh';
 end
 params.outputFcn = 'purelin';
@@ -320,17 +459,17 @@ end
 figure(1233); clf;
 if any(imag(inpast(:)))
     subplot(211)
-    plot(real(out-0*xt(traininds)),'g.-','MarkerSize',20); hold on;
+    plot(real(out-1*xt(traininds)),'g.-','MarkerSize',20); hold on;
     plot(real(outhat),'r.-');
     plot(real(outri),'k.-')
     xlim([1 100]);
     subplot(212)
-    plot(imag(out-0*xt(traininds)),'g.-','MarkerSize',20); hold on;
+    plot(imag(out-1*xt(traininds)),'g.-','MarkerSize',20); hold on;
     plot(imag(outhat),'r.-');
     plot(imag(outri),'k.-')
     xlim([1 100]);
 else
-    plot(real(out-0*xt(traininds)),'g.-'); hold on;
+    plot(real(out-1*xt(traininds)),'g.-'); hold on;
     plot(real(outhat),'r.-');
     plot(real(outri),'k.-')
     xlim([1 100]);    
@@ -402,13 +541,15 @@ cnet.test(0.1)
 %%
 % non-linear function approximation from Hagan & Menhaj
 params = [];
-params.domap = 1;
+params.domap = 'reim';
 params.hiddenSize = [4 50];
 params.debugPlots=0;
 params.mu = 1e-3;
-params.trainFcn = 'trainlm'; params.minbatchsize = round(numel(traininds)*0.7);
+params.trainFcn = 'trainlm'; 
+%params.trainFcn = 'trainbr'; 
+
 params.initFcn = 'nguyen-widrow';
-params.batchtype='fixed';
+params.batchtype='randperm';
 params.layersFcn = 'mytansig'; %'mytanh';'sigrealimag2';
 params.outputFcn = 'purelin';
 params.nbrofEpochs = 300;
@@ -419,11 +560,29 @@ in = 2*rand(4,100000)-1;
 out = sin(2*pi*in(1,:)) .* in(2,:).^2 .* in(3,:).^3 .* in(4,:).^4 .* ...
     exp(-1*(in(1,:)+in(2,:)+in(3,:)+in(4,:)));
 
+traininds = 1:numel(in);
+params.minbatchsize = round(numel(traininds)*0.7);
+
 cnet = complexnet(params);
+
+%{
+params.inputConnect = [1;0;0];
+params.layerConnect = zeros(3,3); 
+params.layerConnect(2,1) = 1;
+params.layerConnect(3,2) = 1;
+params.biasConnect = [1;1;1;];
+cnet = complexcascadenet(params);
+%}
+
 cnet = cnet.train(in,out);
 outhat = cnet.test(in);
 figure(101); clf;
 plot(out,outhat,'.','MarkerSize',18);
+
+net = feedforwardnet(params.hiddenSize);
+net = train(net,in,out);
+outri = net(in);
+hold on; plot(out,outri,'.','MarkerSize',18);
 
 %% clipping narrowband functions in the passband
 
@@ -527,7 +686,7 @@ params.hiddenSize = [16 6 ]/2;
 params.debugPlots=0;
 params.mu = 1e-3;
 params.trainFcn = 'trainlm'; params.minbatchsize = round(numel(traininds)*0.7);
-params.batchtype='fixed';
+params.batchtype='randperm';%'fixed';
 if any(imag(inpast(:)))
     params.initFcn = 'crandn'; 'c-nguyen-widrow';
     params.layersFcn = 'satlins';'sigrealimag2';'cartrelu';
@@ -695,7 +854,7 @@ fs = 2*(fc+bw); % (Hz) sample rate
 
 %---------------------------------------------
 % create a random signal with given bandwidth
-num=1e7;
+num=1e5;
 JtoSdB = 0;
 ibb = 10^(JtoSdB/10) * crandn(1,num);
 lpFilt = designfilt('lowpassfir', 'PassbandFrequency', bw/(fs/2),...
@@ -786,7 +945,7 @@ params.hiddenSize = [4 2 1];
 %params.hiddenSize = [16 6 ]*16;  % wrks for ~7k weights
 params.debugPlots=0;
 params.mu = 1e-3;
-params.trainFcn = 'trainlm'; params.minbatchsize = round(numel(traininds)*0.7);
+params.trainFcn = 'trainlm'; params.minbatchsize =  'split70_15_15';
 params.batchtype='fixed';
 if any(imag(inpast(:))) 
     params.initFcn = 'crandn'; % do not use 'c-nguyen-widrow';
@@ -822,30 +981,32 @@ else
 end
 
 % matlab predictor
-net = feedforwardnet( 2 * params.hiddenSize );
-if any(imag(inpast(:)))       
-    net = configure(net,realifyfn(inpast),realifyfn(out));
-    net.initFcn = 'initlay';
-    [dim1,dim2] = size(net.inputWeights);
-    for ii= 1:dim1
-        for jj=1:dim2
-            net.inputWeights{ii,jj}.initFcn = 'rands';
+net = feedforwardnet( 2*params.hiddenSize );
+if any(imag(inpast(:)))
+    DOPARTICULAR = 0;
+    if DOPARTICULAR
+        net = configure(net,realifyfn(inpast),realifyfn(out));
+        net.initFcn = 'initlay';
+        [dim1,dim2] = size(net.inputWeights);
+        for ii= 1:dim1
+            for jj=1:dim2
+                net.inputWeights{ii,jj}.initFcn = 'rands';
+            end
+        end
+        [dim1,dim2] = size(net.inputWeights);
+        for ii= 1:dim1
+            for jj=1:dim2
+                net.layerWeights{ii,jj}.initFcn = 'rands';
+            end
+        end
+        [dim1] = length(net.biases);
+        for ii=1:dim1, net.biases{ii}.initFcn = 'rands'; end
+        net = init(net);
+        
+        for ii=1:length(net.layers)
+            net.layers{ii}.transferFcn='satlins';
         end
     end
-    [dim1,dim2] = size(net.inputWeights);
-    for ii= 1:dim1
-        for jj=1:dim2
-            net.layerWeights{ii,jj}.initFcn = 'rands';
-        end
-    end
-    [dim1] = length(net.biases);
-    for ii=1:dim1, net.biases{ii}.initFcn = 'rands'; end
-    net = init(net);
-    
-    for ii=1:length(net.layers)
-        net.layers{ii}.transferFcn='satlins';
-    end
-
     net = train(net,realifyfn(inpast),realifyfn(out));
     outri = net(realifyfn(inpast)); outri = outri(1:end/2,:) + 1i * outri(end/2+1:end,:);
 else
@@ -861,7 +1022,7 @@ plot(real(outri-out),'k.-')
 ylim(max(abs(real(st)))*[-2 2]);
 xlim([1 100]);
 title(sprintf('recovering s(t) from volterra( s(t) + i(t) ) J/S=%0.1fdB using split re/im tansig 8-4-2 nets',JtoSdB));
-legend('random N(0,1) signal','complex network mse=237e-4','re/im network mse=11e-4')
+legend('random N(0,1) signal','complex network mse=','re/im network mse=')
 xlabel('samples');
 ylabel('real part');
 grid minor;
@@ -877,8 +1038,6 @@ ylabel('imag part');
 grid minor;
 
 
-
-
-
-
+norm(outhat-out).^2
+norm(outri-out).^2
 
