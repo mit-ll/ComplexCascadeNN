@@ -13,3 +13,12 @@ whereas, making a symbol decision is a split real/imag operation
 Most non-linear problems will get stuck in local minima when using gradient techniques, so 
 the preferred method is to use a blended Hessian/gradient approach (Levenberg Marquardt)
 
+Bayesian Regularization (MacKay) uses a mahalanobis distance metric that combines the network
+error with the netowrk weights norm, adapting the estimate of the variance of each at each 
+step.  The approach uses an estimate of the number of parameters in the network problem.
+
+Cascade architecture (cascadecomplexnet) adds connections from the input directly to deeper 
+layers and also connections skipping layers to benefit signal subtraction problems.
+
+comparenets is used to check gradient and Jacobian calculations with MATLAB and between 
+cascade and complex
