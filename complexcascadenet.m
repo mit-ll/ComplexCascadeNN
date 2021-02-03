@@ -94,7 +94,8 @@ classdef complexcascadenet < handle
         nbrofEpochsdefault = 1e3; % number of iterations picking a batch each time and running gradient        
         lrate_default = 1e-2; % initial step size for the gradient        
 
-        initial_mu = 1e-3; % Hessian + mu * eye for Levenberg-Marquardt
+        lm_mu = 0.001; % Hessian + mu * eye for Levenberg-Marquardt
+        br_mu = 0.001; % Bayesian regularization
                
         batchsize_per_feature = 50;    % number of samples per feature to use at a time in a epoch
         minbatchsizedefault = 25;
@@ -331,7 +332,7 @@ classdef complexcascadenet < handle
             if isfield(params,'mu')
                 obj.mu = params.mu; 
             else
-                obj.mu = obj.initial_mu;                
+                obj.mu = obj.lm_mu;                
             end
             
             if isfield(params,'mu_inc')
@@ -690,9 +691,16 @@ classdef complexcascadenet < handle
         % input is InputWeights{layer}, LayerWeights{tolayer,fromlayer}, 
         % bias{layer} 
         % output is [b IW LW] stacked over the layers
+        % can be used for single sample (gradient) or multiple samples
+        % (Jacobian) entries
         function bIWLW = Weights_to_vec(obj,bias,InputWeights,LayerWeights)
+
+            % for multiple outputs, nbrofSamples is number of outputs
+            % times the number of data samples 
+            % e.g. nbrofSamplesinBatch * nbrofOut
             nbrofSamples = size(bias{1},3);
             ii = 1:nbrofSamples;
+            
             bIWLW = zeros(sum(obj.nbrofBias+obj.nbrofWeights),nbrofSamples);
             for tolayer = 1:obj.nbrofLayers
                 if obj.biasConnect(tolayer)
@@ -861,9 +869,10 @@ classdef complexcascadenet < handle
             if floor(obj.hiddenSize)~=obj.hiddenSize
                 error('hiddenSize is not an integer');
             end            
-            if nbrofOutUnits>1 && any(validatestring(obj.trainFcn,{'trainlm','trainbr'}))            
-                error('complexcascadenet: multiple outputs not supported');
-            end            
+            
+            %if nbrofOutUnits>1 && any(validatestring(obj.trainFcn,{'trainlm','trainbr'}))            
+            %    error('complexcascadenet: multiple outputs not supported');
+            %end            
             
             % allocate space for gradients
             % sensitivity{n} = dcost/da{n} vector of dimension a{n}
@@ -877,11 +886,16 @@ classdef complexcascadenet < handle
             % that has rate parameters that are same - not a big deal
             [sensitivity,stateIW,DeltaIW,stateb,Deltab] = deal(cell(obj.nbrofLayers,1));
             [stateLW,DeltaLW] = deal(cell(obj.nbrofLayers,obj.nbrofLayers));            
-                        
+                                   
             switch obj.trainFcn
                 case {'trainlm','trainbr'}
-                    obj.alpha = 0; obj.beta = 1/2;
-                    obj.mu = obj.initial_mu;                    
+                    obj.alpha = 0; 
+                    % Hessian*beta, jace*beta matches matlab for trainlm
+                    obj.beta = 1/2;  
+            end
+            switch obj.trainFcn
+                case 'trainlm',obj.mu = obj.lm_mu;
+                case 'trainbr',obj.mu = obj.br_mu;
             end
             
              switch obj.batchtype
@@ -1028,7 +1042,7 @@ classdef complexcascadenet < handle
             
             switch obj.trainFcn
                 case {'trainlm','trainbr'}
-                    Jac = zeros(obj.nbrofParameters,nbrofSamplesinBatch);
+                    Jac = zeros(obj.nbrofParameters,nbrofSamplesinBatch*nbrofOutUnits);
                     % Hessian and Jac*error are derived from Jac and don't
                     % need to be pre allocated
                     %Hessian = zeros(nbrofParameters,nbrofParameters);
@@ -1038,11 +1052,11 @@ classdef complexcascadenet < handle
                     [JacLW] = deal(cell(obj.nbrofLayers,obj.nbrofLayers));                   
                     
                     for layer=1:obj.nbrofLayers
-                        JacIW{layer} = zeros([size(DeltaIW{layer}),nbrofSamplesinBatch]);
-                        Jacb{layer} = zeros([size(Deltab{layer}),nbrofSamplesinBatch]);                        
+                        JacIW{layer} = zeros([size(DeltaIW{layer}),nbrofSamplesinBatch*nbrofOutUnits]);
+                        Jacb{layer} = zeros([size(Deltab{layer}),nbrofSamplesinBatch*nbrofOutUnits]);                        
                         for fromlayer = 1:layer-1
                             JacLW{layer,fromlayer} = ...
-                                zeros([size(DeltaLW{layer,fromlayer}),nbrofSamplesinBatch]);                            
+                                zeros([size(DeltaLW{layer,fromlayer}),nbrofSamplesinBatch*nbrofOutUnits]);                            
                         end                        
                     end
             end
@@ -1058,10 +1072,11 @@ classdef complexcascadenet < handle
             obj.WeightsBuffer(:,1) = bIWLW;
        
             % update the weights over the epochs
-            [msetrain,msetest,msevalidate] = deal(-1*ones(1,obj.nbrofEpochs));
+            [Msetrain,Msetest,Msevalidate] = deal(-1*ones(1,obj.nbrofEpochs));
             %lrate = obj.lrate;
             %disp('input learning rate is not being used, set in gradient directory');     
-                        
+            [Gradient,Mu,Gamma,Ew] = deal(nan(1,obj.nbrofEpochs));
+            
             epoch = 0; 
             keeptraining = 1; 
             testfail = 0;
@@ -1080,7 +1095,7 @@ classdef complexcascadenet < handle
             %--------------------------------------------------------------
             while keeptraining
                 epoch=epoch+1;                
-                printthisepoch = (epoch/obj.printmseinEpochs == floor(epoch/obj.printmseinEpochs));
+                printthisepoch = ((epoch-1)/obj.printmseinEpochs == floor((epoch-1)/obj.printmseinEpochs));
                 
                  % pick a batch for this epoch for training or keep it fixed
                 % throughout (@todo: could pull fixed out of the loop but
@@ -1140,22 +1155,22 @@ classdef complexcascadenet < handle
                 % not taking 1/2 of the square 
                 % normalized would be y{obj.nbrofLayers} - out_normalized
                 msecurr = mean( abs(curr(:)-trn(:)).^2 );
-                Ew = (bIWLW'*bIWLW);
-                Ed = msecurr*1;%nbrofSamplesinBatch;
+                ew = (bIWLW'*bIWLW);
+                ed = msecurr*1;%nbrofSamplesinBatch;
                 
                 if epoch==1
                     switch obj.trainFcn
                         case 'trainbr'
-                            if Ew < 100*eps
+                            if ew < 100*eps
                                 obj.alpha = 1;
                             else
-                                obj.alpha = obj.gamma/(2 * Ew);
+                                obj.alpha = obj.gamma/(2 * ew);
                             end
-                            obj.beta = (nbrofSamplesinBatch - obj.gamma)/(2 * Ed);
+                            obj.beta = (nbrofSamplesinBatch*nbrofInUnits - obj.gamma)/(2 * ed);
                             if (obj.beta<=0), obj.beta = 1/2; end
                     end
                 end                
-                perfcurr = obj.beta*Ed + obj.alpha*Ew;
+                perfcurr = obj.beta*ed + obj.alpha*ew;
                 
                 if epoch==1
                     best.msetrn = msecurr;
@@ -1181,53 +1196,65 @@ classdef complexcascadenet < handle
                 splitrealimag = zeros(1,obj.nbrofLayers);
                 gradientacc = 0;
                 for layer=obj.nbrofLayers:-1:1                             
-                    % sensitivity is the gradient at the middle of the layer
-                    % sensitivity = d{cost}/d{xn} called "sensitivity"
-                    % 
+                    % sensitivity is the gradient wrt n, at the middle of the layer
+                    % sensitivity = d{error}^2/d{n}
+                    % sensitivityf = d{error}/d{n}                    
                     [sensitivity{layer},sensitivityf{layer}] = ...
-                        deal(zeros( obj.nbrofUnits(2,layer), nbrofSamplesinBatch));                   
+                        deal(zeros( obj.nbrofUnits(2,layer), nbrofSamplesinBatch*nbrofOutUnits));
                     
-                    splitrealimag(layer)=0; 
-                    if isstruct(fdot{layer}), splitrealimag(layer) = 1; end
-                                        
+                     % split re/im derivatives are returned as .real,.imag
+                    if isstruct(fdot{layer}), splitrealimag(layer) = 1; else, splitrealimag(layer)=0; end
+                    
                     if layer==obj.nbrofLayers
-                        % for output layer, using mean-squared error
+                        % for output layer, mean-squared error allows for
+                        % real and imag parts to be calculated separately
+                        %
                         % w = w - mu (y-d) f'(net*) x*                        
-
-                        % have to include the dx/dy = 1/gain on the output
-                        % since mse is computed there
-                        % @todo: a better way is to make a constant output weighting node
                         err = curr-trn;
                         if splitrealimag(layer)            
+                            % fdot is the derivative of the output nonlinearity
+                            % include the outputmap since it affects the error
                             fdot_times_outputmap_derivative = ...
                                 obj.dounrealifyfn(derivative_outputmap * obj.dorealifyfn(fdot{layer}.real + 1i*fdot{layer}.imag));                            
                             sensitivity{layer} = real(err) .* real(fdot_times_outputmap_derivative) + ...
                                 1i* imag(err).* imag(fdot_times_outputmap_derivative);                                                        
-                            sensitivityf{layer} = fdot_times_outputmap_derivative;                            
-                        else  
+                        else                              
                             fdot_times_outputmap_derivative = obj.dounrealifyfn(derivative_outputmap * obj.dorealifyfn(fdot{layer}));                            
-                            sensitivity{layer} = err .* conj( fdot_times_outputmap_derivative );                            
-                            sensitivityf{layer} = conj( fdot_times_outputmap_derivative );         
-                        end                        
+                            sensitivity{layer} = err .* conj(fdot_times_outputmap_derivative);
+                        end                                                
+                                      
+                        % compute sensitivityf = derror/dn for possibly
+                        % multiple outputs.  each row is due to each output
+                        % [ derror/dn      0          0     ]
+                        % [    0        derror/dn     0     ]   
+                        % [    0           0       derror/dn]
+                        for outindex = 1:nbrofOutUnits
+                            outputinds = (outindex-1)*nbrofSamplesinBatch + (1:nbrofSamplesinBatch);
+                            if splitrealimag(layer) 
+                                sensitivityf{layer}(outindex,outputinds) = fdot_times_outputmap_derivative(outindex,:);                
+                            else
+                                sensitivityf{layer}(outindex,outputinds) = conj(fdot_times_outputmap_derivative(outindex,:));
+                            end
+                        end                                        
                     else                                                
-                        % factor out the fdot from the r loop
+                        % factor out the fdot from the tolayer loop
                         % as in fdot  * sum{ sensitivity{tolayer}*W }   
                         %                \-----LW_sensitivity-------/                        
                         if splitrealimag(layer)
                             LW_sensitivity.real = 0; LW_sensitivity.imag = 0;
-                            LW_sensitivityf.real = 0; LW_sensitivityf.imag = 0;
+                            [LW_sensitivityf.imag, LW_sensitivityf.real] = deal(zeros(size(sensitivityf{layer})));
                         else
                             LW_sensitivity = 0;
-                            LW_sensitivityf = 0;
-                        end                        
-                        for tolayer = layer+1:obj.nbrofLayers                            
-                            LWtolayer = obj.LayerWeights{tolayer,layer};                                      
+                            LW_sensitivityf = zeros(size(sensitivityf{layer}));                            
+                        end
+                        
+                        for tolayer = layer+1:obj.nbrofLayers
+                            LWtolayer = obj.LayerWeights{tolayer,layer};
+                            
                             % if no layer weight, no contribution
-                            if ~isempty(LWtolayer)                                
+                            if ~isempty(LWtolayer)
                                 % in backprop, sensitivity to layer
                                 stolayer = sensitivity{tolayer};
-                                sftolayer = sensitivityf{tolayer};
-                                
                                 if splitrealimag(layer)
                                     % for 2-layer derivation, see equation(17)
                                     % "Extension of the BackPropagation
@@ -1238,33 +1265,56 @@ classdef complexcascadenet < handle
                                     LW_sensitivity.imag = LW_sensitivity.imag + ...
                                         (  (imag(LWtolayer).' * real(stolayer)) +...
                                         -1*(real(LWtolayer).' * imag(stolayer) ) );
-                                    
-                                    LW_sensitivityf.real = LW_sensitivityf.real + ...
-                                        (  (real(LWtolayer).' * real(sftolayer)) +...
-                                        (imag(LWtolayer).' * imag(sftolayer)) );
-                                    LW_sensitivityf.imag = LW_sensitivityf.imag + ...
-                                        (  (imag(LWtolayer).' * real(sftolayer)) +...
-                                        -1*(real(LWtolayer).' * imag(sftolayer)) );
-                                    
                                 else
                                     LW_sensitivity = LW_sensitivity + ...
                                         ( LWtolayer.' * stolayer);
-                                    LW_sensitivityf = LW_sensitivityf + ...
-                                        ( LWtolayer.' * sftolayer);
                                 end
-                            end
-                        end
-                        
+                                
+                                % for multiple outputs, need to loop through outputs
+                                % easy way to think of this is that multiple
+                                % outputs causes a fork at the last layer, which
+                                % then requires keeping that many gradients
+                                for outindex = 1:nbrofOutUnits
+                                    outputinds = (outindex-1)*nbrofSamplesinBatch + (1:nbrofSamplesinBatch);
+                                    sftolayer = sensitivityf{tolayer}(:,outputinds);
+                                    if splitrealimag(layer)
+                                        LW_sensitivityf.real(:,outputinds) = LW_sensitivityf.real(:,outputinds) + ...
+                                            (  (real(LWtolayer).' * real(sftolayer)) +...
+                                            (imag(LWtolayer).' * imag(sftolayer)) );
+                                        LW_sensitivityf.imag(:,outputinds) = LW_sensitivityf.imag(:,outputinds) + ...
+                                            (  (imag(LWtolayer).' * real(sftolayer)) +...
+                                            -1*(real(LWtolayer).' * imag(sftolayer)) );                                        
+                                    else
+                                        LW_sensitivityf(:,outputinds) = LW_sensitivityf(:,outputinds) + ...
+                                            ( LWtolayer.' * sftolayer);                                        
+                                    end
+                                end                                
+                            end % if there is a layer weight
+                            
+                        end % going through all the tolayers
+                                                
+                        % multiplying by fdot, which was factored out
+                        % gradient calculations don't care about number of
+                        % outputs
                         fdotlayer = fdot{layer};
                         if splitrealimag(layer)
                             sensitivity{layer} = fdotlayer.real.*LW_sensitivity.real +...
                                 -1i* fdotlayer.imag .* LW_sensitivity.imag;
-                            sensitivityf{layer} = fdotlayer.real.*LW_sensitivityf.real +...
-                                -1i* fdotlayer.imag .* LW_sensitivityf.imag;                            
                         else
                             sensitivity{layer} = conj(fdotlayer).*LW_sensitivity;
-                            sensitivityf{layer} = conj(fdotlayer).*LW_sensitivityf;                   
                         end
+                        % multiplying by fdot, handling the multiple output
+                        % case for the jacobian calculations
+                        for outindex = 1:nbrofOutUnits
+                            outputinds = (outindex-1)*nbrofSamplesinBatch + (1:nbrofSamplesinBatch);
+                            if splitrealimag(layer)
+                                sensitivityf{layer}(:,outputinds) = fdotlayer.real.*LW_sensitivityf.real(:,outputinds) +...
+                                    -1i* fdotlayer.imag .* LW_sensitivityf.imag(:,outputinds);
+                            else
+                                sensitivityf{layer}(:,outputinds) = conj(fdotlayer).*LW_sensitivityf(:,outputinds);
+                            end
+                        end
+                        
                     end % if nn=nbrofLayers, i.e. last layer
 
                     if obj.biasConnect(layer)
@@ -1286,6 +1336,8 @@ classdef complexcascadenet < handle
                         end
                     end
                     
+                    % keeping track of the gradients here (but could do it
+                    % as a vector later...).  this is easier debugging
                     gradientacc = gradientacc + ...
                         sum(abs(Deltab{layer}(:)).^2) + ...
                         sum(abs(DeltaIW{layer}(:)).^2);
@@ -1293,20 +1345,28 @@ classdef complexcascadenet < handle
                         gradientacc = gradientacc + ...
                             sum(abs(DeltaLW{layer,fromlayer}(:)).^2);
                     end
-                    
-                    % Jacobian dcost/dparameters
-                    for ll=1:obj.nbrofUnits(2,layer)
-                        if obj.biasConnect(layer)
-                            Jacb{layer}(ll,:,:) = sensitivityf{layer}(ll,:);
-                        end
-                        if obj.inputConnect(layer)
-                            JacIW{layer}(ll,:,:) = bsxfun(@times,conj(a0),sensitivityf{layer}(ll,:));
-                        end
-                        for fromlayer = 1:layer-1
-                            if obj.layerConnect(layer,fromlayer)
-                                % weighted average of sensitivity with input measurements
-                                inputtolayer = a{fromlayer};
-                                JacLW{layer,fromlayer}(ll,:,:) =  bsxfun(@times,conj(inputtolayer),sensitivityf{layer}(ll,:));
+                                       
+                    % Jacobian (DeltaF) terms are obtained as outer product
+                    % of input a with sensitivityf
+                    for outindex = 1:nbrofOutUnits
+                        outputinds = (outindex-1)*nbrofSamplesinBatch + (1:nbrofSamplesinBatch);
+                        for layeroutputindex = 1:obj.nbrofUnits(2,layer)
+                            
+                            sf = sensitivityf{layer}(layeroutputindex,outputinds);
+                            if obj.biasConnect(layer)
+                                Jacb{layer}(layeroutputindex,:,outputinds) = sf;
+                            end
+                            if obj.inputConnect(layer)
+                                JacIW{layer}(layeroutputindex,:,outputinds) = ...
+                                    bsxfun(@times,conj(a0),sf);
+                            end
+                            for fromlayer = 1:layer-1
+                                if obj.layerConnect(layer,fromlayer)
+                                    % weighted average of sensitivity with input measurements
+                                    inputtolayer = a{fromlayer};
+                                    JacLW{layer,fromlayer}(layeroutputindex,:,outputinds) =  ...
+                                        bsxfun(@times,conj(inputtolayer),sf);
+                                end
                             end
                         end
                     end
@@ -1319,12 +1379,7 @@ classdef complexcascadenet < handle
                     
                 end
                 gradientacc = sqrt( gradientacc );  
-                
-                %for linear single neuron, no output mapping
-                % DeltaW = err_times_outputmap_derivative .* conj( yprime{nn} ) * ynnminus1'/nbrofSamplesinBatch;      
-                % Jac = conj( yprime{nn} ) * conj(ynnminus1(1:end-1,mm)));
-                % jace += transpose(Jac) * err_times_outputmap_derivative(:,mm);
-                
+                            
                 % update all the weight matrices (including bias weights)
                 %
                 switch obj.trainFcn
@@ -1374,12 +1429,13 @@ classdef complexcascadenet < handle
                         % current weights
                         bIWLW = Weights_to_vec(obj,obj.bias,obj.InputWeights,obj.LayerWeights);        
                         totalnbrofParameters = (2-isreal(bIWLW))*obj.nbrofParameters;                        
-                        Ew = (bIWLW'*bIWLW);                        
-                        Ed = msecurr * 1;%nbrofSamplesinBatch;                                                
-                        perfcurr = obj.beta * Ed + obj.alpha * Ew;                                                
+                        ew = (bIWLW'*bIWLW);                        
+                        ed = msecurr * 1;%nbrofSamplesinBatch;                                                
+                        perfcurr = obj.beta * ed + obj.alpha * ew;                                                
                             
                         % generally, QR decomposition has better behavior
-                        % than computing Hessian via Jac*Jac'
+                        % than computing Hessian via Jac*Jac' but slower in
+                        % software
                         USEQR = 0; 
                         % fast update is rank one updates to base qr(Jac')
                         FAST_UPDATE = 0;
@@ -1393,25 +1449,21 @@ classdef complexcascadenet < handle
                                 % for debugging the LM optimization of loading
                                 fprintf('epoch %d numstep %d mu %0.5f+alpha %0.5f\n',...
                                     epoch,numstep,obj.mu,obj.alpha);
-                            end
-                            
-                            fprintf('epoch %d numstep %d mu %0.5f+alpha %0.5f\n',...
-                                epoch,numstep,obj.mu,obj.alpha);
+                            end                            
                             
                             % include Bayesian Regularization
                             mua = obj.mu + obj.alpha;
-                                                        
-                            % loading the Hessian and regularizing
-                            Hblend = obj.beta*Hessian + mua*ee;
-                            
-                            if isnan(rcond(Hblend))
-                                error('Condition number of blended Hessian is nan.  What did you do?');
-                            end                            
-                            
+                                                                                            
                             %----------------------------------------------
-                            % Blended Newton / Gradient 
-                            % (i.e. LevenBerg-Marquardt)                            
+                            % Blended Newton / Gradient
+                            % (i.e. LevenBerg-Marquardt)
                             if USEQR==0
+                                % loading the Hessian and regularizing
+                                Hblend = obj.beta*Hessian + mua*ee;
+                                
+                                if isnan(rcond(Hblend))
+                                    error('Condition number of blended Hessian is nan.  What did you do?');
+                                end
                                 deltabIWLW = Hblend\(obj.beta*jace + obj.alpha*bIWLW);
                             else
                                 % use qr decomposition instead of Hessian which
@@ -1439,9 +1491,9 @@ classdef complexcascadenet < handle
                             % Check the mse for the update
                             curr = obj.test( in(:,batchtrain) );                            
                             msetrn = mean( abs(curr(:)-trn(:)).^2 );
-                            Ew = (bIWLW'*bIWLW);
-                            Ed = msetrn * 1;%nbrofSamplesinBatch;          
-                            perftrn = obj.beta * Ed + obj.alpha * Ew;                            
+                            ew = (bIWLW'*bIWLW);
+                            ed = msetrn * 1;%nbrofSamplesinBatch;          
+                            perftrn = obj.beta * ed + obj.alpha * ew;                            
                             
                             if isnan(deltabIWLW)
                                 warning('epoch %d deltabIWLW has nan values',epoch);
@@ -1467,12 +1519,12 @@ classdef complexcascadenet < handle
                         switch obj.trainFcn
                             case 'trainbr'                                
                                 obj.gamma = totalnbrofParameters - obj.alpha*trace( inv(obj.beta*Hessian + obj.alpha*ee) );
-                                if Ew < 100*eps
+                                if ew < 100*eps
                                     obj.alpha = 1;
                                 else
-                                    obj.alpha = obj.gamma/(2 * Ew);
+                                    obj.alpha = obj.gamma/(2 * ew);
                                 end
-                                obj.beta = (nbrofSamplesinBatch - obj.gamma)/(2 * Ed);
+                                obj.beta = (nbrofSamplesinBatch*nbrofInUnits - obj.gamma)/(2 * ed);
                                 if (obj.beta<=0), obj.beta = 1/2; end
                         end              
                     otherwise
@@ -1517,15 +1569,19 @@ classdef complexcascadenet < handle
                 msetst = mean( abs(curr(:)-tst(:)).^2 );                                
                 curr = obj.test( in(:,batchvalidate) );
                 msevl = mean( abs(curr(:)-vl(:)).^2 );                                
-                                             
-                msetrain(epoch)= msetrn;
-                msetest(epoch) = msetst;
-                msevalidate(epoch) = msevl;
-                                
-                Ew = (bIWLW'*bIWLW);
-                Ed = msetrn * 1;%nbrofSamplesinBatch;                        
-                perftrn = obj.beta * Ed + obj.alpha * Ew;
+                                                            
+                ew = (bIWLW'*bIWLW);
+                ed = msetrn * 1;%nbrofSamplesinBatch;                        
+                perftrn = obj.beta * ed + obj.alpha * ew;
                 
+                Msetrain(epoch)= msetrn;
+                Msetest(epoch) = msetst;
+                Msevalidate(epoch) = msevl;
+                Gradient(epoch) = gradientacc;
+                Mu(epoch) = obj.mu;
+                Gamma(epoch) = obj.gamma;
+                Ew(epoch) = ew;                
+
                 if numel(batchvalidate)
                     % if validation performance improves, update best network
                     % and clear validation failure count to allow for up
@@ -1553,17 +1609,17 @@ classdef complexcascadenet < handle
                         best.perftrn = perftrn;                        
                         best.epoch = epoch;                        
                     end
-                end                
-
+                end
+                
                 epochtime = toc(tstart);
                                 
                 if printthisepoch
                     fprintf('epoch %d: msetrain %f msetest %f msevalidate %f grad %e\n',...
-                        epoch,(msetrn),(msetst),(msevl),gradientacc);
-                    fprintf('epoch %d: gamma %0.3f mu %0.5f alpa %0.3f, beta %0.3f, Ed %0.3f Ew %0.3f\n',...
-                        epoch,obj.gamma,obj.mu,obj.alpha,obj.beta,Ed,Ew);                                                                 
+                        epoch,(msetrn),(msetst),(msevl),gradientacc);                    
+                    fprintf('epoch %d: gamma %0.3f mu %0.5f alpa %0.3f, beta/nbrofSamplesinBatch %0.3f, ed %0.3f ew %0.3f\n',...
+                            epoch,obj.gamma,obj.mu,obj.alpha,obj.beta/nbrofSamplesinBatch,ed,ew);                        
                 end                                
-                
+                                
                 kt.epoch = (epoch < obj.nbrofEpochs);
                 kt.time = (epochtime < obj.maxtime);
                 kt.mu = (obj.mu < obj.mu_max);
@@ -1589,18 +1645,29 @@ classdef complexcascadenet < handle
             
             if obj.performancePlots
                 figure(231); clf;
-                semilogy(msetrain(1:epoch),'b.-','MarkerSize',20); hold on;
-                semilogy(msetest(1:epoch),'r+-','MarkerSize',4);
-                semilogy(msevalidate(1:epoch),'go-','MarkerSize',4);
+                ha(1) = subplot(411);
+                semilogy(Msetrain(1:epoch),'b.-','MarkerSize',20); hold on;
+                semilogy(Msetest(1:epoch),'r+-','MarkerSize',4);
+                semilogy(Msevalidate(1:epoch),'go-','MarkerSize',4);
                 semilogy(1:epoch,msevl*ones(1,epoch),'.','MarkerSize',4)
                  legend('train (for determining weights)',...
                     'test (for reporting performance)',...
                     sprintf('validate (exit on %d increases from best)',obj.max_fail),...
-                    'optimal weights','FontSize',18,'FontWeight','bold');
+                    'optimal weights','FontSize',12,'FontWeight','bold');
+                grid minor;                
+                ylabel('mean-squared error','FontSize',12,'FontWeight','bold');
+                title('Trajectory of performance','FontSize',12,'FontWeight','bold');
+                ha(2) = subplot(412);
+                semilogy(Gradient(1:epoch),'.-','MarkerSize',20); ylabel('gradient','FontSize',12,'FontWeight','bold');
                 grid minor;
-                xlabel('epoch','FontSize',18,'FontWeight','bold');
-                ylabel('mean-squared error','FontSize',18,'FontWeight','bold');
-                title('Trajectory of performance','FontSize',18,'FontWeight','bold');
+                ha(3) = subplot(413);
+                semilogy(Mu(1:epoch),'.-','MarkerSize',20); ylabel('mu','FontSize',12,'FontWeight','bold');
+                grid minor;
+                ha(4) = subplot(414);
+                semilogy(Ew(1:epoch),'.-','MarkerSize',20); ylabel('||w||^2','FontSize',12,'FontWeight','bold');
+                xlabel('epoch','FontSize',12,'FontWeight','bold');
+                grid minor;
+                linkaxes(ha,'x');
             end            
             
         end
