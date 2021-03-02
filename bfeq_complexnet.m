@@ -1,7 +1,5 @@
 % two -element array example
 
-realifyfn = @(x) [real(x); imag(x)];
-
 % random noise interference
 crandn = @(m,n) complex(randn(m,n),randn(m,n))/sqrt(2);
 
@@ -21,7 +19,8 @@ numbits = 1e6;
 M = 4; %set modulation order for QAM
 span = 10; %span of the Tx/Rx filters in Symbols
 rolloff = 0.25; %rolloff of Tx/Rx filters
-nSamp = 4;      %Samples/symbol
+nSamp = 2;
+nSamp = 4      %Samples/symbol
 filtDelay = log2(M)*span; %filter delay in bits
 lastValidSample = numbits - ceil(filtDelay);
 hMod = comm.RectangularQAMModulator(M, 'BitInput',true); %QAM modulator
@@ -55,15 +54,18 @@ fprintf('BER = %5.2e\nBit Errors = %d\nBits Transmitted = %d\n',errorStats);
 
 
 bw = 1e6;             % (Hz) signal bandwidth
-fc = 10e6;            % (Hz) center frequency
+fc = 10*bw;           % (Hz) center frequency
 fs = nSamp*2*(fc+bw); % (Hz) sample rate
 
 % from passband sample rate to samples per symbol
 [P,Q] = rat( nSamp*bw / fs);
 
+% from fc to fIF, set fIF to the middle of the band for best shaping
+fintermediate = fs * 2*P/Q * 1/2 * 1/2;   % (Hz) intermediate frequency
+
 %---------------------------------------------
 JtoSdB = 30;
-snrdB = 12      % (dB) Es/No symbol-to-noise ratio
+snrdB = 10      % (dB) Es/No symbol-to-noise ratio
 
 hMod.reset;
 hTxFilter.reset;
@@ -90,28 +92,20 @@ ibb = transpose(ibb);
 % modulate to passband fc where nonlinearity takes place
 tvec = (0:length(ibb)-1)/fs; 
 carriersignal = exp(1i*2*pi*fc*tvec);
-
+carriertointermediate = exp(1i*2*pi*(fintermediate-fc)*tvec);
 % can affect the phase over frequency.  not a dominant effect
 finterf = 1e3;  
 
-trainingduration = 5e-3;
-
-%trainingduration = 1e-3;
-
 % based on duration of the training to determine a frequency offset
-%trainingduration = 0.8e-3;
-
-% cnet ber lower than net
-%trainingduration = 0.6e-3;
-
-
-%trainingduration = 0.4e-3;
-
-
-
+%trainingduration = 20e-3;
+%trainingduration = 10e-3;
+%trainingduration = 5e-3;
+%trainingduration = 1e-3;
+%trainingduration = 0.5e-3;
+%trainingduration = 0.25e-3;
+trainingduration = 0.1e-3;
 
 fsoi = 1/10 * 1/trainingduration;
-
 carriersignalinterf = carriersignal.*exp(1i*2*pi*finterf*tvec);
 carriersignalsoi = carriersignal.*exp(1i*2*pi*fsoi*tvec);
 
@@ -175,13 +169,45 @@ figure(190); plot(pos(1,:)/lambda,pos(2,:)/lambda,'k.','MarkerSize',24); axis([-
 
 %---------------------------------------------
 % this filter is applied to the passband signal->modulated to baseband
-% lowpass filer designed to cut off at bw compared to fs
-lpFilt = designfilt('lowpassfir', 'PassbandFrequency', bw/(fs/2),...
-    'StopbandFrequency', bw/(fs/2)*1.1, 'PassbandRipple', 0.5, ...
+% lowpass filer designed to cut off at bw compared to fs/2
+lpFilt = designfilt('lowpassfir', 'PassbandFrequency', 1.25*bw/2/(fs/2),...
+    'StopbandFrequency', 1.25*bw/2/(fs/2)*1.1, 'PassbandRipple', 0.5, ...
     'StopbandAttenuation', 65, 'DesignMethod', 'kaiserwin');
 [Gd,w] = grpdelay(lpFilt);
-gdtouse = floor(Gd(1));
+gdlowpass = floor(Gd(1));
 %---------------------------------------------
+
+
+%---------------------------------------------
+% this filter is applied to the passband signal->modulated to the passband 
+% IF frequency
+bpFilt = designfilt('bandpassfir', 'FilterOrder', length(lpFilt.Coefficients)-1, ...
+                    'CutoffFrequency1', (fintermediate-bw/2 * 1.25)/(fs/2), ...
+                    'CutoffFrequency2', (fintermediate+bw/2 * 1.25)/(fs/2), ...
+                    'StopbandAttenuation1', 60, 'PassbandRipple', 0.5, ...
+                    'StopbandAttenuation2', 60, 'DesignMethod', 'cls');
+[Gd,w] = grpdelay(bpFilt);
+gdbandpass= floor(Gd(1));
+%---------------------------------------------
+
+%---------------------------------------------
+% this filter is applied to the IF passband signal->modulated to baseband
+% lowpass filer designed to cut off at bw compared to fs/2 * 2*P/Q
+lpFilt2 = designfilt('lowpassfir', 'PassbandFrequency', 1.25*bw/2/(fs/2 * 2*P/Q),...
+    'StopbandFrequency', 1.25*bw/2/(fs/2 * 2*P/Q)*1.1, 'PassbandRipple', 0.5, ...
+    'StopbandAttenuation', 65, 'DesignMethod', 'kaiserwin');
+[Gd,w] = grpdelay(lpFilt2);
+gdlowpass2 = floor(Gd(1));
+%---------------------------------------------
+
+
+% check that sbb and sbb--lpFilt looks about the same
+sbbtilde = filter(lpFilt,sbb);
+nfft = 2^16; fvec=(-nfft/2:nfft/2-1)/nfft * fs/2;
+figure(10); clf;
+plot(fvec/1e6, db(abs(fftshift(fft(sbb(1:nfft)))))); hold on;
+plot(fvec/1e6, db(abs(fftshift(fft(sbbtilde(1:nfft))))),'--');
+
 
 %%
 %backoffdBs = -30:2:-1;
@@ -209,54 +235,64 @@ switch nlChoice
         inr = 10^((JtoSdB + snrdB)/10);
         %numlagsnet = 2*nSamp + 1; % one more than the oversampling rate
         numlagsnet = nSamp + 1;
-        %numlagsnet = nSamp
     case 'linear'
         numlagsnet = 1
 end
 
+% training window at complex baseband
 trainingratio = trainingduration * fs * P/Q / (numants * numlagsnet)
 numtraining = floor(numants*numlagsnet*trainingratio)
 traininds = 1:numtraining;
 
-for bb = 1:numel(backoffdBs)
+% compute equivalent window at passband, so that sensitivity 
+% to change can be determined
+numtrainingpass = trainingduration * fs; 
+
+numsim=100;
+%postfix='backoffs';%for bb = 1:numel(backoffdBs)
+postfix='trials';
+for bb = 1:numsim
     
-    inpastnl = []; inpast=[];
-    for aa = 1:numants
-        
+    inpastnl = []; inpast=[]; inpastpassnl=[];
+    [interfdropdB,interfphasechangerads,...
+                signaldropdB,signalphasechangerads] = deal(zeros(1,numants));
+    
+    for aa = 1:numants        
         % create noise per symbol and resample to complex baseband
-        len = ceil( (gdtouse-1 + length(ipass))*P/(Q*nSamp) );
+        len = ceil( (gdlowpass-1 + length(ipass))*P/(Q*nSamp) );
         noise = 10^(-snrdB/20) * crandn(1,len);
         noisebb = resample( noise, nSamp*Q, P);             % complex baseband
         noisebb = filter(lpFilt,noisebb);
-        noisebb = noisebb(gdtouse-1+(1:numel(carriersignal)));
+        noisebb = noisebb(gdlowpass-1+(1:numel(carriersignal)));
         noisepass = real(noisebb).*real(carriersignal) - imag(noisebb).*imag(carriersignal);
         
         %antenna delay for signal, interference
         ipass_delayed = delayseq(ipass(:),taui(aa),fs);
         spass_delayed = delayseq(spass(:),taus(aa),fs);
+                
+        % sensitivity testing by changing power and phase after training
+        testindspass = (numtrainingpass+1):length(spass_delayed);
         
-        signaldropdB = 5;
-        signalphasechangerads = 10 * pi/180;
-        tausexcess = 1/fs * signalphasechangerads/(2*pi);
-        fprintf('bb%d aa%d: dropping signal power by %0.3f dB for nontraining\n',bb,aa,signaldropdB);
-        spass_delayed(numtraining+1:end) = 10^(-signaldropdB/20) * spass_delayed(numtraining+1:end);
-        
+        signaldropdB(aa) = 0*5*rand(1);
+        fprintf('bb%d aa%d: dropping signal power by %0.3f dB for nontraining\n',bb,aa,signaldropdB(aa));
+        spass_delayed(testindspass) = 10^(-signaldropdB(aa)/20) * spass_delayed(testindspass);        
         if aa==1
-            fprintf('bb%d aa%d: signal extra delay %0.5f deg phase at carrier\n',bb,aa,signalphasechangerads);
-            spass_delayed(numtraining+1:end) = delayseq(spass_delayed(numtraining+1:end),tausexcess,fs);
+            signalphasechangerads(aa) = 0*10 * pi/180 * randn(1);
+            tausexcess = 1/fs * signalphasechangerads(aa)/(2*pi);        
+            fprintf('bb%d aa%d: signal extra delay %0.5f deg phase at carrier\n',bb,aa,signalphasechangerads(aa)*180/pi);
+            spass_delayed(testindspass) = delayseq(spass_delayed(testindspass),tausexcess,fs);
         end
         
-        interfdropdB = 3;
-        interfphasechangerads = 10 * pi/180;
-        tausexcess = 1/fs * interfphasechangerads/(2*pi);
-        fprintf('bb%d aa%d: dropping interf power by %0.3f dB for nontraining\n',bb,aa,interfdropdB);
-        ipass_delayed(numtraining+1:end) = 10^(-interfdropdB/20) * ipass_delayed(numtraining+1:end);
-        
+        interfdropdB(aa) = 0*3*randn(1);
+        fprintf('bb%d aa%d: dropping interf power by %0.3f dB for nontraining\n',bb,aa,interfdropdB(aa));
+        ipass_delayed(testindspass) = 10^(-interfdropdB(aa)/20) * ipass_delayed(testindspass);        
         if aa==1
-            fprintf('bb%d aa%d: interf extra delay %0.5f deg phase at carrier\n',bb,aa,interfphasechangerads);
-            ipass_delayed(numtraining+1:end) = delayseq(ipass_delayed(numtraining+1:end),tausexcess,fs);
+            interfphasechangerads(aa) = 0*10 * pi/180 * randn(1);
+            tausexcess = 1/fs * interfphasechangerads(aa)/(2*pi);        
+            fprintf('bb%d aa%d: interf extra delay %0.5f deg phase at carrier\n',bb,aa,interfphasechangerads(aa)*180/pi);
+            ipass_delayed(testindspass) = delayseq(ipass_delayed(testindspass),tausexcess,fs);
         end
-
+        %}
         
         % adding up interference, signal, and noise                
         zpass = transpose( ipass_delayed + spass_delayed  + noisepass(:));
@@ -269,8 +305,11 @@ for bb = 1:numel(backoffdBs)
                 [zpasst,znl,txtvt] = volterra(zpass,lags,beta);                
                 [~,inl,~] = volterra(ipass,lags,beta);
                 [~,snl,~] = volterra(spass,lags,beta);
-            case 'tanh'                
-                backoffdB = backoffdBs(bb) + (rand(1)*2 -1)        
+            case 'tanh'                                
+                
+                %backoffdB = backoffdBs(bb) + (rand(1)*2 -1) 
+                backoffdB = backoffdBs(1) + (rand(1)*2 -1)                                         
+                
                 backoff = 10^(backoffdB/10);
                 alpha = sqrt(backoff/inr);
                 snl = tanh(alpha*spass)/alpha;
@@ -283,18 +322,23 @@ for bb = 1:numel(backoffdBs)
         % nonlinear passband signal -> complex baseband
         zbbnl = znl.*real(carriersignal) - 1i*znl.*imag(carriersignal);
         zbbnl = filter(lpFilt,zbbnl);
-        zbbnl = 2*zbbnl(gdtouse:end);
+        zbbnl = 2*zbbnl(gdlowpass:end);
         
         % linear passband signal -> complex baseband
         zbbrx = zpass.*real(carriersignal) - 1i*zpass.*imag(carriersignal);
         zbbrx = filter(lpFilt,zbbrx);
-        zbbrx = 2*zbbrx(gdtouse:end);
+        zbbrx = 2*zbbrx(gdlowpass:end);
 
+        % nonlinear passband signal -> passband at bw
+        zpassbnl = znl.*real(carriertointermediate);
+        zpassbnl = filter(bpFilt,zpassbnl);
+        zpassbnl = 2*zpassbnl(gdbandpass:end);
+        
         % resample to nSamp per symbol
         ytnl = resample(zbbnl, P, Q);
+        ypnl = resample(zpassbnl, 2*P, Q);
         yt = resample(zbbrx, P, Q);
-        
-        
+
         % debugging
         % baseband signal going through passband conversion and back looks
         % the same as original when carrienrsignals are the same
@@ -302,22 +346,27 @@ for bb = 1:numel(backoffdBs)
             % interference linear
             ibb1 = ipass.*real(carriersignal) - 1i*ipass.*imag(carriersignal);
             ibb1 = filter(lpFilt,ibb1);
-            ibb1 = 2*ibb1(gdtouse:end);
+            ibb1 = 2*ibb1(gdlowpass:end);
             
             % interference nonlinear
             ibb2 = inl.*real(carriersignal) - 1i*inl.*imag(carriersignal);
             ibb2 = filter(lpFilt,ibb2);
-            ibb2 = 2*ibb2(gdtouse:end);
+            ibb2 = 2*ibb2(gdlowpass:end);
             
             % signal linear
             sbb1 = spass.*real(carriersignal) - 1i*spass.*imag(carriersignal);
             sbb1 = filter(lpFilt,sbb1);
-            sbb1 = 2*sbb1(gdtouse:end);
+            sbb1 = 2*sbb1(gdlowpass:end);
+
+            % passband signal -> passband at fIF
+            spb1 = spass.*real(carriertointermediate);
+            spb1 = filter(bpFilt,spb1);
+            spb1 = 2*spb1(gdbandpass:end);
             
             % signal nonlinear
             sbb2 = snl.*real(carriersignal) - 1i*snl.*imag(carriersignal);
             sbb2 = filter(lpFilt,sbb2);
-            sbb2 = 2*sbb2(gdtouse:end);
+            sbb2 = 2*sbb2(gdlowpass:end);
             
             xt1 = resample(ibb1, P,Q);
             xt2 = resample(ibb2, P,Q);
@@ -325,6 +374,26 @@ for bb = 1:numel(backoffdBs)
             % st1 has frequency offset  
             st1 = resample(sbb1, P,Q);
             st2 = resample(sbb2, P,Q);
+                        
+            % passband signal with frequency offset
+            sp1 = resample(spb1, 2*P,Q);            
+            
+            figure(901); clf;
+            d = round(length(lpFilt.Coefficients)/2);
+            indstoplot = d+1+(1:1000);
+            xmax = movmax(abs(spass(indstoplot)),[nSamp,nSamp]);
+            plot(spass(indstoplot),'LineWidth',0.1); hold on;
+            plot(xmax,'k','LineWidth',3);
+            plot(-xmax,'k','LineWidth',3);
+            grid minor; grid on;
+            
+            figure(902); clf;            
+            plot(real(sbb1(indstoplot(1:end/2)))); ylim([-1.2 1.2]);
+            grid minor; grid on;
+            
+            figure(903); clf;            
+            plot(imag(sbb1(indstoplot(1:end/2))));  ylim([-1.2 1.2]);
+            grid minor; grid on;
             
             figure(1003);clf;
             subplot(211);
@@ -360,6 +429,13 @@ for bb = 1:numel(backoffdBs)
             yttnl(ll+1, ll + (1:L-ll) ) = ytnl(1:L-ll);
         end
         
+        % f(s+i) real passband samples
+        L = length(ypnl);
+        yptnl = zeros(2*numlagsnet,L);
+        for ll=0:2*numlagsnet-1
+            yptnl(ll+1, ll + (1:L-ll) ) = ypnl(1:L-ll);
+        end        
+        
         % (s+i) samples
         L = length(ytnl);
         ytt = zeros(numlagsnet,L);
@@ -369,8 +445,13 @@ for bb = 1:numel(backoffdBs)
         
         % f_nl(s+i) across antennas and delays
         inpastnl = [inpastnl; yttnl];
+        
+        % passband f_nl(s+i) across antennas and delays
+        inpastpassnl = [inpastpassnl; yptnl];
+                
         % (s+i) across antennas and delays
-        inpast = [inpast; ytt];
+        inpast = [inpast; ytt];        
+        
     end
     
     % soi and interference cut to same length as yt so they can be used as
@@ -409,13 +490,18 @@ for bb = 1:numel(backoffdBs)
     outstap = w'*inpast;
     disp('stap sinr without nonlinearity (dB)');
     [bers(bb).stap,sinrstap]= estimateber(fs * P/Q,st,outstap,data,hDemod,hError,hRxFilter,fsoi);
+        
+    %if bers(bb).stap > 0.4
+    %    fprintf('ber without nonlinearity %0.5f,continuing\n',bers(bb).stap(1)); 
+    %    continue;
+    %end
     
     % linear estimate when nonlinear
     w=(inpastnl(:,traininds)*inpastnl(:,traininds)')\ (inpastnl(:,traininds)*outtrain');
     outstap = w'*inpastnl;
     disp('NONLINEAR stap sinr (dB)');    
     [bers(bb).stapnl,sinrstapnl]= estimateber(fs * P/Q,st,outstap,data,hDemod,hError,hRxFilter,fsoi);
-            
+                
     %{
     prompt = 'Do you want to continue y/n [y]: ';
     str = input(prompt,'s');
@@ -445,7 +531,6 @@ for bb = 1:numel(backoffdBs)
     %}
     
     
-    %--------------------------------------------------------------------
     % non-linear predictor parameters
     params = [];
     params.domap = 'gain';'complex';'reim';
@@ -470,13 +555,43 @@ for bb = 1:numel(backoffdBs)
     hiddenSize_reim = [16 8 4];
     
     
+    %----------------------------------------------------------------------
+    %       P A S S - B A N D
+    %----------------------------------------------------------------------
+    %params.initFcn = 'nguyen-widrow';        
+    %params.layersFcn = 'mytansig';
+    %cnet = cnet.train(inpastpassnl(:,traininds),sp1(traininds)); outhat = cnet.test(inpastpassnl);        
+    netpass = cascadeforwardnet( hiddenSize_reim  );
+    netpass.trainFcn='trainlm';
+    netpass.trainParam.max_fail = 1000;     % default is 6, but give it chance
+    netpass.trainParam.epochs = 1000;
+    netpass.trainParam.showCommandLine=true;
+    netpass.biasConnect = false(size(netpass.biasConnect));
+    %netpass.biasConnect(1) = true;
+    netpass = train(netpass,inpastpassnl(:,traininds),sp1(traininds)); 
+    outpass = netpass(inpastpassnl); 
+    tvec = (0:length(outpass)-1)/ (fs * 2*P/Q);
+    carriertobaseband = exp(1i*2*pi*fintermediate*tvec);
+    outb =  outpass.*real(carriertobaseband) - 1i*outpass.*imag(carriertobaseband);
+    outb = filter(lpFilt2,outb);
+    outb = 2*outb(gdlowpass2:end);
+    outb = resample(outb, 1,2);
+    [bers(bb).netpass,sinrpass]= estimateber(fs * P/Q,st,outb,data,hDemod,hError,hRxFilter,fsoi);
+    %----------------------------------------------------------------------
+    
+    
+    %----------------------------------------------------------------------    
+    %       R E - I M
+    %----------------------------------------------------------------------
     %net = feedforwardnet( hiddenSize_reim  );    
     warning('using cascade feedforwardnet');
     net = cascadeforwardnet( hiddenSize_reim  );
     net.trainFcn='trainlm'; 'trainbr';
-    net.trainParam.max_fail = 5000;     % default is 6, but give it chance
-    net.trainParam.epochs = 5000;
+    net.trainParam.max_fail = 1000;     % default is 6, but give it chance
+    net.trainParam.epochs = 1000;
     net.trainParam.showCommandLine=true;
+    net.biasConnect = false(size(net.biasConnect));
+    %net.biasConnect(1) = true;    
     if any(imag(intrain(:)))
         DOPARTICULAR = 0;
         if DOPARTICULAR
@@ -507,22 +622,23 @@ for bb = 1:numel(backoffdBs)
     else
         net = train(net,intrain,outtrain);
         outri = net(in);
-    end
-    
+    end    
     % same as net.numWeightElements
     numb = cellfun(@numel,net.b); numb = sum(numb(:));
     numiw = cellfun(@numel,net.IW); numiw = sum(numiw(:));    
     numlw = cellfun(@numel,net.LW); numlw = sum(numlw(:));    
-    nbrofParametersri = numb + numiw + numlw;    
-        
-    [bers(bb).net,sinrreim]= estimateber(fs * P/Q,st,outri,data,hDemod,hError,hRxFilter,fsoi);
-    
+    nbrofParametersri = numb + numiw + numlw;            
+    [bers(bb).net,sinrreim]= estimateber(fs * P/Q,st,outri,data,hDemod,hError,hRxFilter,fsoi);   
+    %----------------------------------------------------------------------
+
+    %----------------------------------------------------------------------    
+    %       C O M P L E X
+    %----------------------------------------------------------------------
     params.debugPlots=0;
     params.mu = 1e-3;
-    params.trainFcn = 'trainlm'; params.nbrofEpochs = 1000
-    %params.trainFcn = 'trainbr'; params.nbrofEpochs = 2000;    
-    %params.trainFcn = 'Adam2'; params.nbrofEpochs = 20000;
-    
+    params.trainFcn = 'trainlm';
+    %params.trainFcn = 'trainbr';
+    %params.trainFcn = 'Adam2'; params.nbrofEpochs = 20000;    
     if 1
         params.minbatchsize =  'split90_10';
         params.batchtype='fixed';
@@ -538,22 +654,24 @@ for bb = 1:numel(backoffdBs)
     params.performancePlots=1;
     params.mu_inc = 10;
     params.mu_dec = 1/100;
-    params.setTeacherError = 1e-6;    
-    params.setTeacherEpochFrequency = 10;    
-    params.max_fail = 5000;
-    %--------------------------------------------------------------------
-
+    params.setTeacherError = 1e-3;    
+    params.setTeacherEpochFrequency = 50;    
+    params.max_fail = 2000;
+    
     if 1 %any(imag(intrain(:)))
         params.initFcn =  'crandn';% do not use 'c-nguyen-widrow' for complex
         params.layersFcn = 'sigrealimag2';'purelin';'cartrelu';'satlins';'myasinh';
         %params.layersFcn = {'purelin','satlins'};  %'cartrelu';'myasinh';'purelin';'satlins';'sigrealimag2';
         % advantage of cartrelu and satlins is no gain scaling
-        %params.layersFcn = params.layersFcn{1:length(params.hiddenSize)};        
-            
+        %params.layersFcn = params.layersFcn{1:length(params.hiddenSize)};                    
         %cnet = complexnet(params);
         params.layerConnections = 'all';
         params.inputConnections = 'all';
-        cnet = complexcascadenet(params);
+        
+        params.biasConnect = false(length(params.hiddenSize)+1,1);
+        %params.biasConnect(1) = true;          
+        cnet = complexcascadenet(params);        
+        
         %{
         % attempt to init weights, and account for mapminmax
         nbrofEpochs = cnet.nbrofEpochs;
@@ -590,9 +708,7 @@ for bb = 1:numel(backoffdBs)
         cnet = complexcascadenet(params);
         cnet = cnet.train(realifyfn(intrain),realifyfn(outtrain));
         outhat = cnet.test(realifyfn(in)); outhat = unrealifyfn(outhat );
-    end
-    
-    
+    end    
     if iscell(params.layersFcn)
         lFcn = params.layersFcn{1};
     else
@@ -602,22 +718,45 @@ for bb = 1:numel(backoffdBs)
         lFcn,num2str(params.hiddenSize));
 
     [bers(bb).cnet,sinrc]= estimateber(fs * P/Q,st,outhat,data,hDemod,hError,hRxFilter,fsoi);    
+    %----------------------------------------------------------------------
     
-    bers(bb)
-        
-    disp('complex sinr (dB)');
-    sinrc
-
-    disp('re/im sinr (dB)');
-    sinrreim 
+    % assign results to output    
+    bers(bb).sinrstap = sinrstap;
+    bers(bb).sinrstapnl = sinrstapnl;
+    bers(bb).sinrreim = sinrreim;
+    bers(bb).sinrc = sinrc;
+    bers(bb).sinrpass = sinrpass;
     
-    disp('stap sinr (dB)');
-    sinrstap
+    bers(bb).params = params;
+    bers(bb).trainingratio = trainingratio;
+    bers(bb).trainingduration = trainingduration;
+    bers(bb).fsoi = fsoi;
+    bers(bb).finterf = finterf;
+    bers(bb).backoffdB = backoffdB;
+    bers(bb).snrdB = snrdB;
+    bers(bb).JtoSdB = JtoSdB;
+    bers(bb).interfdropdB=interfdropdB;
+    bers(bb).interfphasechangerads=interfphasechangerads;
+    bers(bb).signaldropdB=signaldropdB;
+    bers(bb).signalphasechangerads=signalphasechangerads;    
+    bers(bb).training_reweights = numel(traininds)/nbrofParametersri;
+    bers(bb).training_complexweights = numel(traininds)/cnet.nbrofParameters ;    
     
-    % linear estimate when nonlinear
-    disp('stap sinr when nonlinear (dB)');
-    sinrstapnl
+    fprintf('\n\n--------------------------\n');
+    fprintf('complex sinr (dB) \t%f, ber %0.5f\n',sinrc, bers(bb).cnet(1));
+    fprintf('pass sinr (dB) \t%f, ber %0.5f\n',sinrpass, bers(bb).netpass(1));    
+    fprintf('re/im sinr (dB) \t%f, ber %0.5f\n',sinrreim , bers(bb).net(1));
+    fprintf('stap sinr (dB) \t%f, ber %0.5f\n',sinrstap, bers(bb).stap(1));
+    fprintf('stap sinr when nonlinear (dB) \t%f, ber %0.5f\n',sinrstapnl, bers(bb).stapnl(1));
+    fprintf('training/reweights %0.3f training/complexweights %0.3f\n',bers(bb).training_reweights,bers(bb).training_complexweights);
+    fprintf('\n\n--------------------------\n');
     
+    
+    filename = sprintf('results%0.3fms_%s.mat',trainingduration/1e-3,postfix);    
+    
+    save(filename,'bers','numants','bw','fc','fs','pos','nlChoice',...
+        'numlagsnet','nSamp','P','Q');    
+      
     figure(1233); clf;
     ha(1) = subplot(211);
     plot(real(st),'g.-','MarkerSize',20); hold on;
@@ -647,59 +786,154 @@ for bb = 1:numel(backoffdBs)
     pause(1);    
 end
 
-
 params.hiddenSize
 hiddenSize_reim
 
 return;
 
 %%
-legtxt = [];
-figure(1021);clf;
-tmpber=nan(1,length(backoffdBs));
-for aa=1:length(backoffdBs), val = bers(aa).stap(1); if ~isempty(val),bb(aa)=val; end; end
-semilogy(backoffdBs,tmpber,'.:','MarkerSize',48); hold on;
-legtxt{end+1} = 'linear input, 2x4-time taps';
+fileinfo=dir('training*.mat');
+filenames = {fileinfo(:).name};
+inds = contains(filenames,'backoff');
+filenames = filenames(~inds);
 
-tmpber=nan(1,length(backoffdBs));
-for aa=1:length(backoffdBs), val = bers(aa).stapnl(1); if ~isempty(val),tmpber(aa)=val; end; end
-semilogy(backoffdBs,tmpber,'.:','MarkerSize',48); hold on;
-legtxt{end+1} = 'nonlinear input';
+filenames = {'results5.0ms_backoffs.mat'};
 
+filenames = {'results5.000ms_trials.mat'};
+filenames = {'results1.000ms_trials.mat'};
+%filenames = {'results0.500ms_trials.mat'};
+filenames = {'results0.250ms_trials.mat'};
+%filenames = {'results0.100ms_trials.mat'};
 
-tmpber=nan(1,length(backoffdBs));
-for aa=1:length(backoffdBs), val = bers(aa).net(1); if ~isempty(val),tmpber(aa)=val; end; end
-semilogy(backoffdBs,tmpber,'.-','MarkerSize',48);
-if exist('hiddenSize_reim','var')
-    netname = sprintf('%s-1 %s',num2str(hiddenSize_reim),'tansig');
-else
-    netname = sprintf('%s-1 %s',num2str(params.hiddenSize),'tansig');
+for ii=1:length(filenames)
+    filename = filenames{ii}
+    load(filename);    
+    params = bers(1).params;
+    
+    figure(1222); clf;
+    subplot(211);
+    plot([bers(:).sinrc],'.-','MarkerSize',32); hold on;
+    plot([bers(:).sinrreim],'.-','MarkerSize',32)
+    plot([bers(:).sinrstapnl],'.-','MarkerSize',32)
+    %plot([bers(:).sinrstap],'.-','MarkerSize',32)
+    xlabel('trials');
+    ylabel('SINR (dB)');
+    legend(sprintf('re-im %s-1 net',num2str(params.hiddenSize)),...
+        sprintf('complex %s-1 net',num2str(params.hiddenSize)),...
+        sprintf('stap non-linear input'),'stap','Fontsize',14,'Location','SouthEast');
+    grid minor;
+    title(regexprep(filename,'_','training '));
+    ylim([-60 10]);
+    
+    subplot(212);
+    tmpbernet=nan(1,length(bers));
+    for aa=1:length(bers), val = bers(aa).net(1); if ~isempty(val),tmpbernet(aa)=val; end; end
+    tmpbercnet=nan(1,length(bers));
+    for aa=1:length(bers), val = bers(aa).cnet(1); if ~isempty(val),tmpbercnet(aa)=val; end; end    
+    tmpberstapnl=nan(1,length(bers));
+    for aa=1:length(bers), val = bers(aa).stapnl(1); if ~isempty(val),tmpberstapnl(aa)=val; end; end    
+
+    semilogy(tmpbernet,'.','MarkerSize',32);hold on;
+    semilogy(tmpbercnet,'.','MarkerSize',32);
+    semilogy(tmpberstapnl,'.-','MarkerSize',32);
+    legtxt = {sprintf('re-im %s-1 net',num2str(params.hiddenSize)),...
+        sprintf('complex %s-1 net',num2str(params.hiddenSize)),...
+        sprintf('stap non-linear input')};
+    
+    if isfield(bers(1),'netpass')
+        tmpberpass=nan(1,length(bers));
+        for aa=1:length(bers), val = bers(aa).netpass(1); if ~isempty(val),tmpberpass(aa)=val; end; end
+        semilogy(tmpberpass,'o-','MarkerSize',12,'LineWidth',2);
+        netname = sprintf('%s-1 %s',num2str(params.hiddenSize),'tansig');
+        legtxt{end+1} =['real passband ' netname];
+    end
+    
+    inds = find(tmpbernet>=tmpbercnet);
+    if ~isempty(inds)
+        semilogy(ones(2,1)*(inds),[tmpbernet(inds); tmpbercnet(inds)],'g-','MarkerSize',32);
+    end
+    legend(legtxt,'Fontsize',14,'Location','SouthEast');    
+    title(sprintf('complex BER lower than re-im BER in %d/%d trials',length(inds),length(tmpbernet)));
+    %[nn,xx]= hist(tmpbercnet./tmpbernet,logspace(-2,2,50))
+    %bar(log10(xx),nn/sum(nn));
+
+        
+    xlabel('trails');
+    ylabel('Bit Error Rate (BER)');
+    grid minor; grid;
+    ylim([10^-3 0.5]);
+    boldify;
+    drawnow; pause;
 end
-legtxt{end+1} = ['re/im ' netname];
 
-tmpber=nan(1,length(backoffdBs));
-for aa=1:length(backoffdBs), val = bers(aa).cnet(1); if ~isempty(val),tmpber(aa)=val; end; end
-semilogy(backoffdBs,tmpber,'.-','MarkerSize',48);
-netname = sprintf('%s-1 split-%s',num2str(params.hiddenSize),'tansig');
-legtxt{end+1} =['complex ' netname];
+%%
+
+fileinfo=dir('training*.mat');
+fileinfo=dir('results*.mat');
+
+filenames = {fileinfo(:).name};
+inds = contains(filenames,'backoff');
+filenames = filenames(inds);
+
+for ii=1:length(filenames)
+    filename = filenames{ii}
+    load(filename);
+    params = bers(1).params;
+    
+    % get the backoff (up to the +/- few dB randomization)
+    backoffdBs = zeros(size(bers));
+    for aa=1:length(bers), backoffdBs(aa) = round(bers(aa).backoffdB/5)*5; end
+    
+    legtxt = [];
+    figure(1021);clf;
+    tmpber=nan(1,length(backoffdBs));
+    for aa=1:length(backoffdBs), val = bers(aa).stap(1); if ~isempty(val),tmpber(aa)=val; end; end
+    semilogy(backoffdBs,tmpber,'.:','MarkerSize',48); hold on;
+    legtxt{end+1} = 'linear input, 2x4-time taps';
+    
+    tmpber=nan(1,length(backoffdBs));
+    for aa=1:length(backoffdBs), val = bers(aa).stapnl(1); if ~isempty(val),tmpber(aa)=val; end; end
+    semilogy(backoffdBs,tmpber,'.:','MarkerSize',48); hold on;
+    legtxt{end+1} = 'nonlinear input';
+        
+    tmpber=nan(1,length(backoffdBs));
+    for aa=1:length(backoffdBs), val = bers(aa).net(1); if ~isempty(val),tmpber(aa)=val; end; end
+    semilogy(backoffdBs,tmpber,'.-','MarkerSize',48);
+    if exist('hiddenSize_reim','var')
+        netname = sprintf('%s-1 %s',num2str(hiddenSize_reim),'tansig');
+    else
+        netname = sprintf('%s-1 %s',num2str(params.hiddenSize),'tansig');
+    end
+    legtxt{end+1} = ['re/im ' netname];
+    
+    tmpber=nan(1,length(backoffdBs));
+    for aa=1:length(backoffdBs), val = bers(aa).cnet(1); if ~isempty(val),tmpber(aa)=val; end; end
+    semilogy(backoffdBs,tmpber,'.-','MarkerSize',48);
+    netname = sprintf('%s-1 split-%s',num2str(params.hiddenSize),'tansig');
+    legtxt{end+1} =['complex ' netname];
+        
+    if isfield(bers(1),'netpass')
+        tmpber=nan(1,length(backoffdBs));
+        for aa=1:length(backoffdBs), val = bers(aa).netpass(1); if ~isempty(val),tmpber(aa)=val; end; end
+        semilogy(backoffdBs,tmpber,'.-','MarkerSize',48);
+        netname = sprintf('%s-1 %s',num2str(params.hiddenSize),'tansig');
+        legtxt{end+1} =['real passband ' netname];
+    end
+        
+    xlabel('backoff (dB)'); ylabel('Bit Error Rate (BER)');
+    grid minor; grid;
+    
+    legend(legtxt,'Location','southeast');
+    %title(sprintf('QPSK signal in interference\nRx compression'));
+    slidify;
+    
+    ylim([1e-4 1]);
+    fnamelessextension = filename(1:end-4)
+    %saveas(gcf, fullfile('figs',fnamelessextension), 'png')
+    pause;
+end
 
 
-xlabel('backoff (dB)'); ylabel('Bit Error Rate (BER)');
-grid minor; grid;
-
-legend(legtxt,'Location','northwest');
-title(sprintf('QPSK signal in interference\nRx compression'));
-slidify;
-
-ylim([1e-4 1]);
-
-
-
-
-
-
-
-return;
 
 
 %% alpha = backoff/inr
@@ -732,427 +966,3 @@ for aa=1:numel(alpha2s)
     legtxt{end+1} = sprintf('alpha=%f approx',alpha);
 end
 legend(legtxt);
-
-%% saving some results
-
-%{
-hiddenSize = 16     8     4
-hiddenSize_reim = 8     4     2
-nbrofParameters = 
-
-[420 571*2]
-
-kk=1;
-results(kk).trainingratio = 1000
-results(kk).sinrc = 5.3267
-results(kk).sinrreim =5.4749
-results(kk).sinrstap =10.6260
-results(kk).sinrstapnl =-1.6240
-results(kk).ber.stap = 0.0076
-results(kk).ber.stapnl = 0.4031
-results(kk).ber.net = 0.0407
-results(kk).ber.cnet = 0.0457
-kk=kk+1
-%--------------------------------------------------------------------------
-results(kk).trainingratio = 2000
-results(kk).sinrc = 3.3843
-results(kk).sinrreim = 3.6764
-results(kk).sinrstap = 10.6111
-results(kk).sinrstapnl = -11.8874
-results(kk).ber.stap = 0.0076
-results(kk).ber.stapnl = 0.4031
-results(kk).ber.net = 0.0806
-results(kk).ber.cnet = 0.0766
-kk=kk+1
-%--------------------------------------------------------------------------
-results(kk).trainingratio = 4000
-results(kk).sinrc = 3.6822
-results(kk).sinrreim = 3.0463
-results(kk).sinrstap = 10.6197
-results(kk).sinrstapnl = -11.8946
-results(kk).ber.stap = 0.0075
-results(kk).ber.stapnl = 0.4035
-results(kk).ber.net = 0.0865
-results(kk).ber.cnet = 0.0713
-kk=kk+1
-%--------------------------------------------------------------------------
-results(kk).trainingratio = 800
-results(kk).sinrc = 2.7163
-results(kk).sinrreim = 3.6191
-results(kk).sinrstap = 10.3911
-results(kk).sinrstapnl = -7.4072
-results(kk).ber.stap = 0.0139
-results(kk).ber.stapnl = 0.3588
-results(kk).ber.net = 0.0817
-results(kk).ber.cnet = 0.1059
-kk=kk+1
-%--------------------------------------------------------------------------
-results(kk).trainingratio = 720
-results(kk).sinrc = 3.9873
-results(kk).sinrreim = 4.4823
-results(kk).sinrstap = 10.5731
-results(kk).sinrstapnl = -7.8884
-results(kk).ber.stap = 0.0089
-results(kk).ber.stapnl = 0.3483
-results(kk).ber.net = 0.0678
-results(kk).ber.cnet = 0.0683
-%--------------------------------------------------------------------------
-
-
-
-
-ans =
-
-    16     8     4
-
-
-hiddenSize_reim =
-
-    16     8     4
-
-nbrofParametersri
-
-nbrofParametersri =
-
-   910
-
-cnet.nbrofParameters*2
-
-ans =
-
-        1142
-
-
-
-
-
-%--------------------------------------------------------------------------
-trainingratio
-
-trainingratio =
-
-   800
-
-complex sinr (dB)
-
-sinrc =
-
-    2.8760
-
-re/im sinr (dB)
-
-sinrreim =
-
-    4.1025
-
-stap sinr (dB)
-
-sinrstap =
-
-   10.6099
-
-stap sinr when nonlinear (dB)
-
-sinrstapnl =
-
-   -8.0279
-
-bers(bb).stap(1)
-
-ans =
-
-    0.0077
-
-bers(bb).stapnl(1)
-
-ans =
-
-    0.3552
-
-bers(bb).net(1)
-
-ans =
-
-    0.0707
-
-bers(bb).cnet(1)
-
-ans =
-
-    0.0910
-%--------------------------------------------------------------------------
-trainingratio =
-
-   600
-
-complex sinr (dB)
-
-sinrc =
-
-    1.9764
-
-re/im sinr (dB)
-
-sinrreim =
-
-    3.1964
-
-stap sinr (dB)
-
-sinrstap =
-
-   10.5577
-
-stap sinr when nonlinear (dB)
-
-sinrstapnl =
-
-  -11.2050
-
-bers(1).stap(1)
-
-ans =
-
-    0.0082
-
-bers(1).stapnl(1)
-
-ans =
-
-    0.4008
-
-bers(1).net(1)
-
-ans =
-
-    0.0953
-
-bers(1).cnet(1)
-
-ans =
-
-    0.1248
-
-
-%--------------------------------------------------------------------------
-trainingratio =
-
-   400
-
-
-complex sinr (dB)
-
-sinrc =
-
-    4.7056
-
-re/im sinr (dB)
-
-sinrreim =
-
-    4.4406
-
-stap sinr (dB)
-
-sinrstap =
-
-   10.5628
-
-stap sinr when nonlinear (dB)
-
-sinrstapnl =
-
-    0.4071
-
-bers(1).stap(1)
-
-ans =
-
-    0.0078
-
-bers(1).stapnl(1)
-
-ans =
-
-    0.1712
-
-bers(1).net(1)
-
-ans =
-
-    0.0637
-
-bers(1).cnet(1)
-
-ans =
-
-    0.0623
-
-%--------------------------------------------------------------------------
-trainingratio =
-
-   320
-
-
-complex sinr (dB)
-
-sinrc =
-
-    5.0171
-
-re/im sinr (dB)
-
-sinrreim =
-
-  -30.9870
-
-stap sinr (dB)
-
-sinrstap =
-
-   10.6224
-
-stap sinr when nonlinear (dB)
-
-sinrstapnl =
-
-    1.4015
-
-bers(1).stap(1)
-
-ans =
-
-    0.0077
-
->> bers(1).stapnl(1)
-
-ans =
-
-    0.1351
-
->> bers(1).net(1)
-
-ans =
-
-    0.4923
-
->> bers(1).cnet(1)
-
-ans =
-
-    0.0574
-
-%--------------------------------------------------------------------------
-trainingratio =
-
-   320
-
-complex sinr (dB)
-
-sinrc =
-
-    0.1124
-
-re/im sinr (dB)
-
-sinrreim =
-
-    1.8870
-
-stap sinr (dB)
-
-sinrstap =
-
-   10.5857
-
-stap sinr when nonlinear (dB)
-
-sinrstapnl =
-
-   -9.6941
-
-bers(1).stap(1)
-
-ans =
-
-    0.0078
-
->> bers(1).stapnl(1)
-
-ans =
-
-    0.3879
-
->> bers(1).net(1)
-
-ans =
-
-    0.1148
-
->> bers(1).cnet(1)
-
-ans =
-
-    0.1671
-
-
-%--------------------------------------------------------------------------
-
-trainingratio =
-
-   320
-
-
-complex sinr (dB)
-
-sinrc =
-
-    3.4850
-
-re/im sinr (dB)
-
-sinrreim =
-
-    2.2498
-
-stap sinr (dB)
-
-sinrstap =
-
-   10.5593
-
-stap sinr when nonlinear (dB)
-
-sinrstapnl =
-
-   -6.9380
-
-bers(1).stap(1)
-
-ans =
-
-    0.0081
-
->> bers(1).stapnl(1)
-
-ans =
-
-    0.3502
-
->> bers(1).net(1)
-
-ans =
-
-    0.1100
-
->> bers(1).cnet(1)
-
-ans =
-
-    0.0873
-
-
-
-
-
-%}

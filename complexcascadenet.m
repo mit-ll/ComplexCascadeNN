@@ -89,10 +89,13 @@ classdef complexcascadenet < handle
         % for debugging
         debugPlots
         printmseinEpochs  % if 1, print every time
+        plotmseinEpochs
         performancePlots
                 
         % for comparison with MATLAB's cascadenet output
         debugCompare
+        recordtoCompare % workerRecord has consecutive records with different mu
+                        % the one matching epoch is this one
         workerRecord
         
         % for comparison with complexnet
@@ -484,6 +487,11 @@ classdef complexcascadenet < handle
                 obj.printmseinEpochs=params.printmseinEpochs;
             else
                 obj.printmseinEpochs=10;
+            end                                        
+            if isfield(params,'plotmseinEpochs')
+                obj.plotmseinEpochs=params.plotmseinEpochs;
+            else
+                obj.plotmseinEpochs=500;
             end                                        
             % hidden layers sizes is a vector 
             obj.hiddenSize = params.hiddenSize;
@@ -918,41 +926,46 @@ classdef complexcascadenet < handle
             % matlab uses bias, weights, ... convention from this function
             %[b,IW,LW] = separatewb(net,workerRecord{1}.WB);    
             try
-                mu = obj.mu;
-                                
-                wRecord = obj.workerRecord;                
-                wr = wRecord{epoch}.WB;
-                jer = wRecord{epoch}.je;
-                jjr = wRecord{epoch}.jj;
-                wr2 = wRecord{epoch}.WB2;                
+                if epoch==1, obj.recordtoCompare=1; end
                 
-                %{                
+                rr = obj.recordtoCompare;
+                
+                wRecord = obj.workerRecord;                
+                wr = wRecord{rr}.WB;
+                jer = wRecord{rr}.je;
+                jjr = wRecord{rr}.jj;
+                wr2 = wRecord{rr}.WB2;                
+                
+                %{
                 % checking that worker has been saved correctly
                 norm(wr2 - wRecord{2}.WB)  
                 
                 % checking matlab's step with itself, using the 
                 % saved jacobian and grad
-                norm(wr - (jjr + wRecord{epoch}.mu*eye(size(jjr)))\jer - wr2)
+                norm(wr - (jjr + wRecord{rr}.mu*eye(size(jjr)))\jer - wr2)
                 
                 % matlab uses multiple workers to achieve better training
-                for ep=2:20 
-                    fprintf('epoch %d ||wbstart{%d}-wbend{%d}|| %f\t', ep,ep,ep-1,norm(wRecord{ep}.WB - wRecord{ep-1}.WB2))
-                    fprintf('epoch %d ||wbstart{%d}-wbstart{%d}|| %f\t', ep,ep,ep-1,norm(wRecord{ep}.WB - wRecord{ep-1}.WB))
-                    fprintf('epoch %d ||wbend{%d}-wbend{%d}|| %f\n', ep,ep,ep-1,norm(wRecord{ep}.WB2 - wRecord{ep-1}.WB2))
+                for ep=2:20
+                    fprintf('epoch %d mu %e ||wbstart{%d}-wbend{%d}|| %f\t', ...
+                        ep,wRecord{ep}.mu,ep,ep-1,norm(wRecord{ep}.WB - wRecord{ep-1}.WB2));
+                    fprintf('epoch %d ||wbstart{%d}-wbstart{%d}|| %f\t', ...
+                        ep,ep,ep-1,norm(wRecord{ep}.WB - wRecord{ep-1}.WB))
+                    fprintf('epoch %d ||wbend{%d}-wbend{%d}|| %f\n', ...
+                        ep,ep,ep-1,norm(wRecord{ep}.WB2 - wRecord{ep-1}.WB2))
                 end
-                
                 %}
+                
                 
                 fprintf('\n\n----------------EPOCH %d -------------------\n\n',epoch);
    
                 % matlab at start of epoch in matlab format
-                btocompare = wRecord{epoch}.b;        
-                IWtocompare = wRecord{epoch}.IW;        
-                LWtocompare = wRecord{epoch}.LW;    
+                btocompare = wRecord{rr}.b;        
+                IWtocompare = wRecord{rr}.IW;        
+                LWtocompare = wRecord{rr}.LW;    
                 
-                jbtocompare = wRecord{epoch}.jb;        
-                jIWtocompare = wRecord{epoch}.jIW;        
-                jLWtocompare = wRecord{epoch}.jLW;  
+                jbtocompare = wRecord{rr}.jb;        
+                jIWtocompare = wRecord{rr}.jIW;        
+                jLWtocompare = wRecord{rr}.jLW;  
                 
                 
                 % conversion from matlab to local inds over all weights
@@ -1008,21 +1021,36 @@ classdef complexcascadenet < handle
                 fprintf('epoch %d Hessian %f\n',epoch,norm(jjrtocompare - Hessian/2));
                 
                 % comparing the Hessian
-                figure(2); plot(db(abs(jjrtocompare(:))),'.-'); hold on; plot(db(abs(Hessian(:))/2),'o')
-                                
-                wr2 = wRecord{epoch}.WB2;                        
+                figure(2); clf;
+                plot(db(abs(jjrtocompare(:))),'.-'); hold on; plot(db(abs(Hessian(:))/2),'o')
+
+                % checking which of the next epochs match
+                for ee = rr + (0:2)
+                    fprintf('comparing to workerRecord{epoch=%d}',ee);
+                    wr2 = wRecord{ee}.WB2;                        
                 
-                w = Weights_to_vec(obj,obj.bias,obj.InputWeights,obj.LayerWeights);
-                wrtocompare(inds) = wr(minds); wrtocompare = wrtocompare(:);
-                norm(w-wrtocompare)
+                    w = Weights_to_vec(obj,obj.bias,obj.InputWeights,obj.LayerWeights);
+                    wr = wRecord{ee}.WB;
+                    wrtocompare(inds) = wr(minds); wrtocompare = wrtocompare(:);
+                    valbeg = norm(w-wrtocompare);
+                    fprintf('at beginning ||w-wrtocompare|| %0.5f\n',valbeg);
                 
-                wr2tocompare(inds) = wr2(minds); wr2tocompare = wr2tocompare(:);
+                    wr2tocompare(inds) = wr2(minds); wr2tocompare = wr2tocompare(:);
                 
-                mu = 1e-3;
-                Hblend = Hessian/2 + mu*eye(obj.nbrofParameters);
-                dW = Hblend \ (jace/2);
-                norm(w - dW - wr2tocompare)
-                                
+                    mu = obj.workerRecord{ee}.mu;
+                    Hblend = Hessian/2 + mu*eye(obj.nbrofParameters);
+                    dW = Hblend \ (jace/2);
+                    valend = norm(w - dW - wr2tocompare);
+                    fprintf('at end ||w -dW -wr2tocompare|| %0.5f\n',valend);
+                    
+                    if valbeg<1e-5 && valend<1e-5
+                        obj.recordtoCompare = ee + 1;
+                        fprintf('matched record %d, setting obj.recordtoCompare %d for next',ee,ee+1);
+                        break;
+                    end
+                    
+                end
+                    
                 fprintf('\n----------------EPOCH %d -------------------\n\n',epoch);                
             catch
                 warning('debug_lm error');
@@ -1317,6 +1345,7 @@ classdef complexcascadenet < handle
             while keeptraining
                 epoch=epoch+1;                
                 printthisepoch = ((epoch-1)/obj.printmseinEpochs == floor((epoch-1)/obj.printmseinEpochs));
+                plotthisepoch = ((epoch-1)/obj.plotmseinEpochs == floor((epoch-1)/obj.plotmseinEpochs));
                 
                 % pick a batch for this epoch for training or keep it fixed
                 % throughout (@todo: could pull fixed out of the loop but
@@ -1874,6 +1903,62 @@ classdef complexcascadenet < handle
                 kt.fail = (testfail < obj.max_fail);
                 keeptraining = all( struct2array(kt) );
                 
+                
+                if plotthisepoch || (obj.performancePlots && keeptraining==0)
+                    figure(231); clf;
+                    ha(1) = subplot(411);
+                    semilogy(Msetrain(1:epoch),'b.-','MarkerSize',20); hold on;
+                    semilogy(Msetest(1:epoch),'r+-','MarkerSize',4);
+                    semilogy(Msevalidate(1:epoch),'go-','MarkerSize',4);
+                    semilogy(1:epoch,msevl*ones(1,epoch),'.','MarkerSize',4)
+                    legend('train (for determining weights)',...
+                        'test (for reporting performance)',...
+                        sprintf('validate (exit on %d increases from best)',obj.max_fail),...
+                        'optimal weights','FontSize',8,'FontWeight','bold');
+                    grid minor;
+                    ylabel('mean-squared error','FontSize',12,'FontWeight','bold');
+                    title('Trajectory of performance','FontSize',12,'FontWeight','bold');
+                    ha(2) = subplot(412);
+                    semilogy(Gradient(1:epoch),'.-','MarkerSize',20); ylabel('gradient','FontSize',12,'FontWeight','bold');
+                    grid minor;
+                    %ha(3) = subplot(413);
+                    %semilogy(Mu(1:epoch),'.-','MarkerSize',20); ylabel('mu','FontSize',12,'FontWeight','bold');
+                    ha(3) = subplot(413);
+                    plot(Aw_delta(1:epoch)*180/pi,'.-','MarkerSize',20); hold on;
+                    plot(Awi_delta(1:epoch)*180/pi,'.-','MarkerSize',20);
+                    plot(Awl_delta(1:epoch)*180/pi,'.-','MarkerSize',20);
+                    plot(Awb_delta(1:epoch)*180/pi,'.-','MarkerSize',20);
+                    legend('all','input','layer','bias');
+                    ylabel('angle (deg)','FontSize',12,'FontWeight','bold');
+                    
+                    grid minor;
+                    ha(4) = subplot(414);
+                    semilogy(Ew(1:epoch),'.-','MarkerSize',20); ylabel('||w||^2','FontSize',12,'FontWeight','bold');
+                    hold on;
+                    semilogy(Ewi(1:epoch),'.-','MarkerSize',20);
+                    semilogy(Ewl(1:epoch),'.-','MarkerSize',20);
+                    semilogy(Ewb(1:epoch),'.-','MarkerSize',20);
+                    xlabel('epoch','FontSize',12,'FontWeight','bold');
+                    legend('all weights','cascade inputs','cascade layers','bias');
+                    grid minor;
+                    linkaxes(ha,'x');
+                end
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
+                
             end % while keeptraining
             %----------------E N D    E P O C H    L O O P ----------------
             %--------------------------------------------------------------
@@ -1889,45 +1974,7 @@ classdef complexcascadenet < handle
             fprintf('keeptraining flags (0 = exit condition reached):\n');
             disp(kt);
             
-            if obj.performancePlots
-                figure(231); clf;
-                ha(1) = subplot(411);
-                semilogy(Msetrain(1:epoch),'b.-','MarkerSize',20); hold on;
-                semilogy(Msetest(1:epoch),'r+-','MarkerSize',4);
-                semilogy(Msevalidate(1:epoch),'go-','MarkerSize',4);
-                semilogy(1:epoch,msevl*ones(1,epoch),'.','MarkerSize',4)
-                 legend('train (for determining weights)',...
-                    'test (for reporting performance)',...
-                    sprintf('validate (exit on %d increases from best)',obj.max_fail),...
-                    'optimal weights','FontSize',12,'FontWeight','bold');
-                grid minor;                
-                ylabel('mean-squared error','FontSize',12,'FontWeight','bold');
-                title('Trajectory of performance','FontSize',12,'FontWeight','bold');
-                ha(2) = subplot(412);
-                semilogy(Gradient(1:epoch),'.-','MarkerSize',20); ylabel('gradient','FontSize',12,'FontWeight','bold');
-                grid minor;
-                %ha(3) = subplot(413);
-                %semilogy(Mu(1:epoch),'.-','MarkerSize',20); ylabel('mu','FontSize',12,'FontWeight','bold');
-                ha(3) = subplot(413);
-                plot(Aw_delta(1:epoch)*180/pi,'.-','MarkerSize',20); hold on;
-                plot(Awi_delta(1:epoch)*180/pi,'.-','MarkerSize',20); 
-                plot(Awl_delta(1:epoch)*180/pi,'.-','MarkerSize',20); 
-                plot(Awb_delta(1:epoch)*180/pi,'.-','MarkerSize',20); 
-                legend('all','input','layer','bias');                
-                ylabel('angle (deg)','FontSize',12,'FontWeight','bold');                
-                
-                grid minor;
-                ha(4) = subplot(414);
-                semilogy(Ew(1:epoch),'.-','MarkerSize',20); ylabel('||w||^2','FontSize',12,'FontWeight','bold');
-                hold on;
-                semilogy(Ewi(1:epoch),'.-','MarkerSize',20);
-                semilogy(Ewl(1:epoch),'.-','MarkerSize',20);
-                semilogy(Ewb(1:epoch),'.-','MarkerSize',20);                
-                xlabel('epoch','FontSize',12,'FontWeight','bold');
-                legend('all weights','cascade inputs','cascade layers','bias');
-                grid minor;
-                linkaxes(ha,'x');
-            end            
+         
             
         end
         
