@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 
 #set the slots (s parameter) to be 1/5GB, so -s 7 for tasks that require 32GB.
-#LLsub ./MatlabCMD.sh -s 4 -c xeon-e5 -t 1-1800 -o /tmp/AM20128/grid.out.$JOB_ID.$TASK_ID -- datadir
+#LLsub ./MatlabCMD.sh -s 9 -c xeon-e5 -t 1-1800 -o /tmp/SW17362/grid.out.$JOB_ID.$TASK_ID -- datadir
 
 if [ "$#" -lt 1 ]; then
     dirname="$(date +%Y-%m-%dT%H%M%z)"
@@ -18,10 +18,10 @@ if [ "$#" -lt 1 ]; then
     echo $githash > ../data/$dirname/GITHASH
     echo $0 > ../data/$dirname/SWEEPSCRIPT
 
-    echo "LLsub /bin/bash 154 -s 4 -c xeon-e5 -t 1-154 -o ~/tmp/grid.out.\$JOB_ID.\$TASK_ID -- ./hardware_sim_batch_script.sh ../data/$dirname/workspaces"
+    echo "LLsub /bin/bash 154 -s 4 -c xeon-e5 -t 1-154 -o ~/tmp/grid.out.\$JOB_ID.\$TASK_ID -- ./bfeq_batch_script.sh ../data/$dirname/workspaces"
 else
     # Execute MATLAB
-    cat <<-MATM |  /usr/local/matlabr2017a/bin/matlab -nosplash -nodisplay -singleCompThread
+    cat <<-MATM |  /usr/local/bin/matlab2020b -nosplash -nodisplay -singleCompThread
 %
 % Execute the Matlab function
 %
