@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 
 #set the slots (s parameter) to be 1/5GB, so -s 7 for tasks that require 32GB.
-#LLsub ./MatlabCMD.sh -s 9 -c xeon-e5 -t 1-1800 -o /tmp/SW17362/grid.out.$JOB_ID.$TASK_ID -- datadir
+#LLsub ./MatlabCMD.sh -s 5 -c xeon-e5 -t 1-1800 -o /tmp/SW17362/grid.out.$JOB_ID.$TASK_ID -- datadir
 
 if [ "$#" -lt 1 ]; then
     dirname="$(date +%Y-%m-%dT%H%M%z)"
@@ -25,6 +25,6 @@ else
 %
 % Execute the Matlab function
 %
-hardware_sim_sweep_task($SLURM_ARRAY_JOB_ID,$SLURM_ARRAY_TASK_ID, '$1');
+bfeq_sweep_task($SLURM_ARRAY_JOB_ID,$SLURM_ARRAY_TASK_ID, '$1');
 MATM
 fi
