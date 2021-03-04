@@ -1,14 +1,13 @@
 function results = bfeq_sweep_task(taskID, outputdir)
     sweeps_per_process = 100;
-    SWEEP = NaN;
-    run('../addpaths.m');
-    n_iters = 40;
+    SWEEP = NaN;    
+    n_iters = 40;                 % iterations per parameter value
     
     % initialize random seed
     rng(taskID);
     
     % default parameters
-    tx_params.n_symbols= 1e5;
+    tx_params.n_symbols= 5e5;
     tx_params.modulationorder = 4; % set modulation order for QAM
     tx_params.span = 10;           % span of the Tx/Rx filters in Symbols
     tx_params.rolloff = 0.25;      % rolloff of Tx/Rx filters
@@ -72,7 +71,7 @@ function results = bfeq_sweep_task(taskID, outputdir)
     %    lFcn,num2str(bf_params.hiddenSize));
     
     % sweep parameters that are 
-    sweep.JNR_dB = [30 35 40];    
+    sweep.JNR_dB = [40 35 30];
     sweep.nSamp = [2 4];
     sweep.n_train_symbols = [200 400 2000 10000 20000];
     sweep.backoff_dB = -30:5:-5;

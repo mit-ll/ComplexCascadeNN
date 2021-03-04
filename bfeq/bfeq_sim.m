@@ -448,13 +448,13 @@ outtrain = out(traininds);
 w=(inpast(:,traininds)*inpast(:,traininds)')\ (inpast(:,traininds)*outtrain');
 outstap = w'*inpast;
 disp('stap sinr without nonlinearity (dB)');
-[ber_stap,sinrstap]= estimateber(fs * P/Q,st,outstap,data,hDemod,hError,hRxFilter,fsoi);
+[ber_stap,sinrstap]= estimateber(fs * P/Q,st,outstap,data,hDemod,hError,hRxFilter,fsoi,debugPlots);
 
 % linear estimate when input is nonlinear
 w=(inpastnl(:,traininds)*inpastnl(:,traininds)')\ (inpastnl(:,traininds)*outtrain');
 outstap = w'*inpastnl;
 disp('NONLINEAR stap sinr (dB)');
-[ber_stapnl,sinrstapnl]= estimateber(fs * P/Q,st,outstap,data,hDemod,hError,hRxFilter,fsoi);
+[ber_stapnl,sinrstapnl]= estimateber(fs * P/Q,st,outstap,data,hDemod,hError,hRxFilter,fsoi,debugPlots);
 %----------------------------------------------------------------------
 
 
@@ -475,7 +475,7 @@ outb =  outpass.*real(carriertobaseband) - 1i*outpass.*imag(carriertobaseband);
 outb = filter(lpFilt2,outb);
 outb = 2*outb(gdlowpass2:end);
 outb = resample(outb, 1,2);
-[ber_netpass,sinrpass]= estimateber(fs * P/Q,st,outb,data,hDemod,hError,hRxFilter,fsoi);
+[ber_netpass,sinrpass]= estimateber(fs * P/Q,st,outb,data,hDemod,hError,hRxFilter,fsoi,debugPlots);
 %----------------------------------------------------------------------
 
 %----------------------------------------------------------------------
@@ -489,7 +489,7 @@ net.trainParam.showCommandLine=true;
 net.biasConnect = bf_params.biasConnect;
 net = train(net,realifyfn(intrain),realifyfn(outtrain));
 outri = net(realifyfn(in)); outri = unrealifyfn(outri);
-[ber_net,sinrreim]= estimateber(fs * P/Q,st,outri,data,hDemod,hError,hRxFilter,fsoi);
+[ber_net,sinrreim]= estimateber(fs * P/Q,st,outri,data,hDemod,hError,hRxFilter,fsoi,debugPlots);
 
 % same as net.numWeightElements
 numb = cellfun(@numel,net.b); numb = sum(numb(:));
@@ -503,7 +503,7 @@ nbrofParametersri = numb + numiw + numlw;
 %----------------------------------------------------------------------
 cnet = complexcascadenet(bf_params);
 cnet = cnet.train(intrain,outtrain); outhat = cnet.test(in);
-[ber_cnet,sinrc]= estimateber(fs * P/Q,st,outhat,data,hDemod,hError,hRxFilter,fsoi);
+[ber_cnet,sinrc]= estimateber(fs * P/Q,st,outhat,data,hDemod,hError,hRxFilter,fsoi,debugPlots);
 %----------------------------------------------------------------------
 
 % assign results to output

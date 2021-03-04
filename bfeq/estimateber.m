@@ -1,4 +1,4 @@
-function [ber,sinr] = estimateber(fs,st,outhat,data,hDemod,hError,hRxFilter,fsoi,debug)
+function [ber,sinr] = estimateber(fs,st,outhat,data,hDemod,hError,hRxFilter,fsoi,debugPlots)
 
 % split of integration interval as estimate of frequency resolution
 fRes = 1/10 * fs/length(st);
@@ -11,8 +11,8 @@ fprintf('estimateber: computing correlation with signal waveform\n');
 [gsplit,computedfds,peaks] = computexcorr(st,outhat,numlags,desiredfds,fs,options);
 gmat = transpose( cell2mat(gsplit) );
 
-if ~exist('debug','var'), debug = 0; end
-if debug>1
+if ~exist('debugPlots','var'), debugPlots = 0; end
+if debugPlots>1
     figure(101);
     imagesc(taus*fs,computedfds,20*log10(abs(gmat)/max(abs(gmat(:)))));
     title('CAF computed via FFT using computexcorr.m');
