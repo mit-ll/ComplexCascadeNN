@@ -1,5 +1,7 @@
 # MLforRF
+Pleaes note the license and disclaimers in this README
 
+# Description
 
 This is a matlab class intended to replace feedforwardnet which takes only real inputs.
 When complex inputs are separated into [real; imag], the ability to do complex operations 
