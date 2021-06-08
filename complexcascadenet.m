@@ -877,17 +877,7 @@ classdef complexcascadenet < handle
                     b = 0.1*crandn( nbrofNeurons, 1);
                 case 'crands'
                     w = rands( nbrofNeurons, nbrofIn ) + 1i*rands( nbrofNeurons, nbrofIn );      
-                    b = rands( nbrofNeurons, 1) + 1i*rands( nbrofNeurons, 1); 
-                case 'c-nguyen-widrow'
-                    % borrowed Matlab's implementation of Nguyen-Widrow
-                    w = zeros(  nbrofNeurons, nbrofIn );
-                    activeregionofactivation = [-2 2];  % tansig('active');
-                    mapregion = [-1 1];
-                    mapregions = repmat(mapregion,nbrofIn,1);
-                    [wr,br]=mycalcnw(mapregions,nbrofNeurons,activeregionofactivation);
-                    [wi,bi]=mycalcnw(mapregions,nbrofNeurons,activeregionofactivation);
-                    w = wr+1i*wi;
-                    b = br+1i*bi;
+                    b = rands( nbrofNeurons, 1) + 1i*rands( nbrofNeurons, 1);                 
                     
                     %-----------------------------
                     % non-complex initializations
@@ -897,167 +887,11 @@ classdef complexcascadenet < handle
                 case 'randn'
                     w = 0.1*randn( nbrofNeurons, nbrofIn );         
                     b = 0.1*randn( nbrofNeurons, 1);
-                case 'nguyen-widrow'
-                    % borrowed Matlab's implementation of Nguyen-Widrow
-                    w = zeros(  nbrofNeurons, nbrofIn );
-                    activeregionofactivation = [-2 2];  % tansig('active');
-                    mapregion = [-1 1];
-                    mapregions = repmat(mapregion,nbrofIn,1);
-                    [w,b]=mycalcnw(mapregions,nbrofNeurons,activeregionofactivation);                    
-              
                 otherwise
                     error('unknown initFcn %s for weights',obj.initFcn);
             end
         end
                 
-        % debug the gradient and jacobian calculations by comparing with
-        % matlab
-        % another way to do this would be to compute finite differences
-        function debug_lm(obj,epoch,Deltab,DeltaIW,DeltaLW,jace,Hessian)            
-            % from "comparenets.m"
-            % sequence to allow for comparing nets:
-            %
-            % net=feedforwardnet()
-            % net = configure(net,in,out)
-            % save initial weights
-            % train while savind workerRecord
-            % copynet to copy the records
-            %
-            % matlab uses bias, weights, ... convention from this function
-            %[b,IW,LW] = separatewb(net,workerRecord{1}.WB);    
-            try
-                if epoch==1, obj.recordtoCompare=1; end
-                
-                rr = obj.recordtoCompare;
-                
-                wRecord = obj.workerRecord;                
-                wr = wRecord{rr}.WB;
-                jer = wRecord{rr}.je;
-                jjr = wRecord{rr}.jj;
-                wr2 = wRecord{rr}.WB2;                
-                
-                %{
-                % checking that worker has been saved correctly
-                norm(wr2 - wRecord{2}.WB)  
-                
-                % checking matlab's step with itself, using the 
-                % saved jacobian and grad
-                norm(wr - (jjr + wRecord{rr}.mu*eye(size(jjr)))\jer - wr2)
-                
-                % matlab uses multiple workers to achieve better training
-                for ep=2:20
-                    fprintf('epoch %d mu %e ||wbstart{%d}-wbend{%d}|| %f\t', ...
-                        ep,wRecord{ep}.mu,ep,ep-1,norm(wRecord{ep}.WB - wRecord{ep-1}.WB2));
-                    fprintf('epoch %d ||wbstart{%d}-wbstart{%d}|| %f\t', ...
-                        ep,ep,ep-1,norm(wRecord{ep}.WB - wRecord{ep-1}.WB))
-                    fprintf('epoch %d ||wbend{%d}-wbend{%d}|| %f\n', ...
-                        ep,ep,ep-1,norm(wRecord{ep}.WB2 - wRecord{ep-1}.WB2))
-                end
-                %}
-                
-                
-                fprintf('\n\n----------------EPOCH %d -------------------\n\n',epoch);
-   
-                % matlab at start of epoch in matlab format
-                btocompare = wRecord{rr}.b;        
-                IWtocompare = wRecord{rr}.IW;        
-                LWtocompare = wRecord{rr}.LW;    
-                
-                jbtocompare = wRecord{rr}.jb;        
-                jIWtocompare = wRecord{rr}.jIW;        
-                jLWtocompare = wRecord{rr}.jLW;  
-                
-                
-                % conversion from matlab to local inds over all weights
-                % (not necessary since MATLAB convention used here)
-                minds = []; inds=[];
-                % plotting plot(minds,inds,'.') shows they are identical
-                
-                
-                % comparing the initial weights and gradient (note 1/2 due
-                % to beta)
-                for layer=1:obj.nbrofLayers
-                    if obj.biasConnect(layer)
-                        fprintf('epoch %d layer %d bias %f jb %f\n',epoch,layer,...
-                            norm(btocompare{layer}- obj.bias{layer}),...
-                            norm(jbtocompare{layer}- Deltab{layer}/2));
-                        
-                        % convert from matlab inds to local inds
-                        minds = [minds; wRecord{1}.ib{layer}(:)];
-                        inds =  [inds; obj.layerbiasinds{layer}(:)];
-                        
-                    end
-                    if obj.inputConnect(layer)
-                        fprintf('epoch %d layer %d IW %f jIW %f\n',epoch,layer,...
-                            norm( IWtocompare{layer} - obj.InputWeights{layer}),...
-                            norm( jIWtocompare{layer} - DeltaIW{layer}/2));
-                        
-                        % convert from matlab inds to local inds
-                        minds = [minds; wRecord{1}.iIW{layer}(:)];
-                        inds = [inds; obj.inputweightinds{layer}(:)];                        
-                    end
-                    for fromlayer = 1:layer-1
-                        if obj.layerConnect(layer,fromlayer)
-                            fprintf('epoch %d to,from %d,%d LW %f jLW %f\n',epoch,layer,fromlayer,...
-                                norm( LWtocompare{layer,fromlayer} -obj.LayerWeights{layer,fromlayer}),...
-                                norm( jLWtocompare{layer,fromlayer} - DeltaLW{layer,fromlayer}/2));
-                            
-                            % convert from matlab inds to local inds
-                            minds = [minds; wRecord{1}.iLW{layer,fromlayer}(:)];
-                            inds = [inds; obj.layerweightinds{layer,fromlayer}(:)];
-                        end
-                    end
-                end
-
-                % Hessian = j*j
-                jjr = wRecord{epoch}.jj;
-                jjrtocompare = zeros(size(jjr));                
-                for ll = 1:numel(minds)
-                    for mm = ll:numel(minds)
-                        jjrtocompare(inds(ll),inds(mm)) = jjr(minds(ll),minds(mm));
-                        jjrtocompare(inds(mm),inds(ll)) = jjr(minds(mm),minds(ll));
-                    end
-                end
-                fprintf('epoch %d Hessian %f\n',epoch,norm(jjrtocompare - Hessian/2));
-                
-                % comparing the Hessian
-                figure(2); clf;
-                plot(db(abs(jjrtocompare(:))),'.-'); hold on; plot(db(abs(Hessian(:))/2),'o')
-
-                % checking which of the next epochs match
-                for ee = rr + (0:2)
-                    fprintf('comparing to workerRecord{epoch=%d}',ee);
-                    wr2 = wRecord{ee}.WB2;                        
-                
-                    w = Weights_to_vec(obj,obj.bias,obj.InputWeights,obj.LayerWeights);
-                    wr = wRecord{ee}.WB;
-                    wrtocompare(inds) = wr(minds); wrtocompare = wrtocompare(:);
-                    valbeg = norm(w-wrtocompare);
-                    fprintf('at beginning ||w-wrtocompare|| %0.5f\n',valbeg);
-                
-                    wr2tocompare(inds) = wr2(minds); wr2tocompare = wr2tocompare(:);
-                
-                    mu = obj.workerRecord{ee}.mu;
-                    Hblend = Hessian/2 + mu*eye(obj.nbrofParameters);
-                    dW = Hblend \ (jace/2);
-                    valend = norm(w - dW - wr2tocompare);
-                    fprintf('at end ||w -dW -wr2tocompare|| %0.5f\n',valend);
-                    
-                    if valbeg<1e-5 && valend<1e-5
-                        obj.recordtoCompare = ee + 1;
-                        fprintf('matched record %d, setting obj.recordtoCompare %d for next',ee,ee+1);
-                        break;
-                    end
-                    
-                end
-                    
-                fprintf('\n----------------EPOCH %d -------------------\n\n',epoch);                
-            catch
-                warning('debug_lm error');
-            end
-            keyboard;
-        end
-        
         %------------------------------------------------------------------
         function obj = train(obj,in,out)
             % in  is features x number of training samples
@@ -1659,24 +1493,7 @@ classdef complexcascadenet < handle
                         % beta now
                         %Hessian = Hessian/2;
                         %jace = jace/2; 
-                        
-                        %--------------------------------------------------
-                        %        D E B U G with MATLAB jacobian
-                        % this is mostly code for deep numerical dive
-                        %--------------------------------------------------                        
-                        if obj.debugCompare     
-                            debug_lm(obj,epoch,Deltab,DeltaIW,DeltaLW,jace,Hessian);
-                        end
-                        
-                        if obj.debugGradient
-                            jacetocompare = WbWb_to_bIWLW(obj,obj.someRecord(epoch).jace);
-                            Jactocompare = WbWb_to_bIWLW(obj,obj.someRecord(epoch).Jac);
-                            fprintf('epoch %d ||gradient complexnet - gradient complexcascadenet|| %f\n',...
-                                epoch,norm(jacetocompare - jace));
-                            fprintf('epoch %d ||Jacobian complexnet - Jacobian complexcascadenet|| %f\n',...
-                                epoch,norm(Jactocompare - Jac));
-                        end                        
-                        
+                                                
                         % current weights
                         bIWLW = Weights_to_vec(obj,obj.bias,obj.InputWeights,obj.LayerWeights);        
                         totalnbrofParameters = (2-isreal(bIWLW))*obj.nbrofParameters;                        
@@ -1942,22 +1759,7 @@ classdef complexcascadenet < handle
                     legend('all weights','cascade inputs','cascade layers','bias');
                     grid minor;
                     linkaxes(ha,'x');
-                end
-                
-                
-                
-                
-                
-                
-                
-                
-                
-                
-                
-                
-                
-                
-                
+                end                
                 
             end % while keeptraining
             %----------------E N D    E P O C H    L O O P ----------------
@@ -1973,8 +1775,6 @@ classdef complexcascadenet < handle
                 epochtime,epoch,(msetrn),(msetst),(msevl));
             fprintf('keeptraining flags (0 = exit condition reached):\n');
             disp(kt);
-            
-         
             
         end
         
