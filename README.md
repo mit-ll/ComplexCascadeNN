@@ -27,6 +27,7 @@ cascade and complex
 
 
 # Licenses
+see LICENSE file
 
 # Citation
 "Application of Complex Split-Activation Feedforward Networks to Beamforming", 
