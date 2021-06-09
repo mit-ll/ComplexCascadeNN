@@ -639,34 +639,6 @@ classdef complexcascadenet < handle
         end
                 
         %------------------------------------------------------------------
-        % copy weights from complexnet and initialize connections to make
-        % casacade into plain feedforward
-        % set initFcn to previous to allow for starting weights to be setup
-        % the same was as complexnet        
-        function objcascade = copycomplexnet(objcascade,objcomplex,params)
-            nbrofLayers = objcomplex.nbrofLayers;
-            params.inputConnect = zeros(nbrofLayers,1); params.inputConnect(1) = 1;
-            params.layerConnect = zeros(nbrofLayers,nbrofLayers);
-            for tolayer=2:nbrofLayers, params.layerConnect(tolayer,tolayer-1) = 1; end            
-            params.biasConnect = ones(nbrofLayers,1);
-            
-            objcascade.someRecord = objcomplex.someRecord;
-            
-            objcascade.bias = cell(1,nbrofLayers);
-            for layer = 1:nbrofLayers
-                objcascade.bias{layer} = objcomplex.Weights{layer}(:,end);
-                if layer==1
-                    objcascade.InputWeights{1} = objcomplex.Weights{1}(:,1:end-1);
-                else
-                    objcascade.LayerWeights{layer,layer-1} = objcomplex.Weights{layer}(:,1:end-1);
-                end
-                objcascade.layers{layer} = objcomplex.layers{layer};
-            end
-            objcascade.initFcn = 'previous';
-            fprintf('Initialized obj.initFcn to %s for copied weights to be used as initial weights\n',objcascade.initFcn);
-        end
-        
-        %------------------------------------------------------------------
         % convert WbWb vectors used in complexnet to bIWLW vectors 
         % used in complexcascadenet assuming feedforward architecture        
         function bIWLW = WbWb_to_bIWLW(obj,WbWb)            
@@ -691,46 +663,7 @@ classdef complexcascadenet < handle
             end            
         end
         
-        %------------------------------------------------------------------
-        function obj = copynet(obj,net,workerRecord,IW,LW,b)
-            % copy over matlab weights            
-            
-            if exist('IW','var') && exist('LW','var') && exist('b','var')
-                fprintf('Using input IW,LW,b\n');
-                %already assigned
-            elseif exist('workerRecord','var')
-                fprintf('Using IW,LW,b from workerRecord{1}.WB\n');                
-                % these are the weights in the weight record
-                [b,IW,LW] = separatewb(net,workerRecord{1}.WB);                
-            else
-                warning('No workerRecord or IW,LW,b.  Using FINAL weights');
-                IW = net.IW;  % these are the final values of weights
-                LW = net.LW;
-                b = net.b;
-            end
-
-            % convert weight vector to layer weights and save in record
-            if exist('workerRecord','var')                               
-                for ee = 1:length(workerRecord)
-                    [workerRecord{ee}.b,workerRecord{ee}.IW,workerRecord{ee}.LW] = separatewb(net,workerRecord{ee}.WB); 
-                    [workerRecord{ee}.b2,workerRecord{ee}.IW2,workerRecord{ee}.LW2] = separatewb(net,workerRecord{ee}.WB2);                    
-                    [workerRecord{ee}.jb,workerRecord{ee}.jIW,workerRecord{ee}.jLW] = separatewb(net,workerRecord{ee}.je); 
-                    
-                    % get the index assignments from vector to layers
-                    num = length(workerRecord{ee}.je);
-                    [workerRecord{ee}.ib,workerRecord{ee}.iIW,workerRecord{ee}.iLW] = separatewb(net,1:num);
-                end                
-                obj.workerRecord = workerRecord; 
-            end
-            
-            obj.InputWeights = IW;
-            obj.LayerWeights = LW;
-            obj.bias = b;
-            obj.initFcn = 'previous';
-            fprintf('Initialized obj.initFcn to %s for copied weights to be used as initial weights\n',obj.initFcn);
-        end
-
-
+       
         %------------------------------------------------------------------        
         % Jacobian contain derivatives of all parameters vectorized instead
         % of each set of weights in a cell
