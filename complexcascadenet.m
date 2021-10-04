@@ -61,9 +61,7 @@ classdef complexcascadenet < handle
         
         jacebIWLW          % gradient from previous epoch
         deltabIWLWprevious           % Hessian^-1*gradient from previous epoch
-        
-        lrate        
-        
+                
         % keep a history of weights as a vector
         WeightsBuffer  % buffer of last max_fail weights
 
@@ -86,7 +84,7 @@ classdef complexcascadenet < handle
         gamma        % number of good parameter measurements
                      % between (0, number of weights + biases )        
                  
-        initFcn      % 'randn','nguyen-widrow'
+        initFcn      % 'randn','rands'
 
         minbatchsize
         batchtype    %'randperm','fixed','index'
@@ -112,13 +110,7 @@ classdef complexcascadenet < handle
         printmseinEpochs  % if 1, print every time
         plotmseinEpochs
         performancePlots
-                
-        % for comparison with MATLAB's cascadenet output
-        debugCompare
-        recordtoCompare % workerRecord has consecutive records with different mu
-                        % the one matching epoch is this one
-        workerRecord
-        
+                        
         % for comparison with complexnet
         debugGradient
         someRecord        
@@ -131,7 +123,6 @@ classdef complexcascadenet < handle
     
     properties (Constant)
         nbrofEpochsdefault = 1e3; % number of iterations picking a batch each time and running gradient        
-        lrate_default = 1e-2; % initial step size for the gradient        
 
         lm_mu = 0.001; % Hessian + mu * eye for Levenberg-Marquardt
         br_mu = 0.001; % Bayesian regularization
@@ -190,10 +181,6 @@ classdef complexcascadenet < handle
             z=complex(2*rand(m,n)-1,2*rand(m,n)-1);
         end        
         
-        function [z,dz] = square(x)
-            z = x.*x;
-            dz = 2 * x;
-        end
         
         % out = in linear, keeps real and imag separate
         function [z,dz]=purelin(x)
@@ -203,13 +190,6 @@ classdef complexcascadenet < handle
             %dz.imag=ones(size(x));            
         end
         
-        % phase only
-        function [z,dz]=purephase(x)
-            z=x./abs(x);
-            % function not differentiable, so use equal effect from all x
-            % http://makeyourownneuralnetwork.blogspot.com/2016/05/complex-valued-neural-networks.html
-            dz=ones(size(x));
-        end
 
         % saturate linear
         % clip real and imag at +/-a
@@ -246,43 +226,13 @@ classdef complexcascadenet < handle
             dz.real(~indsr) = 1;
             dz.imag(~indsi) = 1;  
             
-            % treating as a complex function does not work!
+            % note: treating as a complex function does not work!
             %dz = zeros(size(z));
             %dz(~indsr) = 1;            
             %dz(~indsi) = dz(~indsi) + 1i;            
         end        
 
-        % two sided sigmoidal        
-        function [z,dz]=mytansig(x)           
-            if 0
-                cval = 2; kval = 2; lval = -1;
-                z =  cval./(1+exp(-kval*x));
-                dz = kval * (z.*(1-z/cval));
-                z = z  + lval;
-            elseif 0        
-                % tansig is the same as cval=2, kval=2, lval = -1                
-                lval = -1;
-                z = tansig(x) - lval;      % take out lval for easy dz calculation
-                dz = 2 *( z.*(1 - z / 2) );
-                z = z  + lval;             % put back in lval
-            else
-                z = tansig(x);
-                dz = tansig('da_dn',x);
-            end            
-            %{ 
-            %check with matlab
-            x = -10:0.001:10;
-            cval = 2; kval = 2; lval = -1;
-            z =  cval./(1+exp(-kval*x));
-            dz = kval * (z.*(1-z/cval));                        
-            z = z  + lval;
-            figure(1);
-            zz=tansig(x); zzp=diff(zz)./diff(x); zzp=tansig('da_dn',x);
-            subplot(211);plot(x,z,'.'); hold on; plot(x,zz,'o');
-            subplot(212);plot(x,dz,'.'); hold on; plot(x(1:end-1),zzp(1:end-1),'o');
-            %}
-        end
-        
+              
         % single sided sigmoidal
         function [z,dz]=sigrealimag(x)
             zr = ( 1./(1+exp(-real(x))) );
@@ -294,7 +244,8 @@ classdef complexcascadenet < handle
             dz.imag = zi.*(1-zi);
         end
         
-        % two sided sigmoidal
+
+        % two sided sigmoidal.  most commonly used activation
         % cval,kval suggested by Benvenuto and Piazza 
         % "On the complex backprop alg" Trans Signal Processing
         function [z,dz]=sigrealimag2(x)
@@ -321,6 +272,11 @@ classdef complexcascadenet < handle
                 dz.imag = tansig('da_dn',imag(x));
             end
         end
+                
+        
+        % -----------purely complex activation functions ------------------
+        % -----------------------------------------------------------------
+        % these functions don't split real and imaginary
         
         % tanh
         % use tansig instead since mathematically equivalent
@@ -334,14 +290,59 @@ classdef complexcascadenet < handle
             z = asinh(x);
             dz = 1./sqrt(1 + x.^2);
         end
+                
+        % two sided sigmoidal can be implemented in a variety of ways
+        % use matlab's tansig for convenience, and may also be faster
+        function [z,dz]=mytansig(x)           
+            if 0
+                cval = 2; kval = 2; lval = -1;
+                z =  cval./(1+exp(-kval*x));
+                dz = kval * (z.*(1-z/cval));
+                z = z  + lval;
+            elseif 0        
+                % tansig is the same as cval=2, kval=2, lval = -1                
+                lval = -1;
+                z = tansig(x) - lval;      % take out lval for easy dz calculation
+                dz = 2 *( z.*(1 - z / 2) );
+                z = z  + lval;             % put back in lval
+            else
+                z = tansig(x);
+                dz = tansig('da_dn',x);
+            end            
+            %{ 
+            %check the function and its derivative
+            x = -10:0.001:10;
+            cval = 2; kval = 2; lval = -1;
+            z =  cval./(1+exp(-kval*x));
+            dz = kval * (z.*(1-z/cval));                        
+            z = z  + lval;
+            figure(1);
+            zz=tansig(x); zzp=diff(zz)./diff(x); zzp=tansig('da_dn',x);
+            subplot(211);plot(x,z,'.'); hold on; plot(x,zz,'o');
+            subplot(212);plot(x,dz,'.'); hold on; plot(x(1:end-1),zzp(1:end-1),'o');
+            %}
+        end
         
-        % split real/imag tanh
-        function [z,dz]=carttanh(x)  
-            zr = tanh(real(x));
-            zi = tanh(imag(x));
-            z =  zr + 1i * zi;
-            dz.real = 1 - zr.^2; dz.imag = 1-zi.^2;
-        end        
+        
+        % these are odd balls
+
+        % phase only
+        function [z,dz]=purephase(x)
+            z=x./abs(x);
+            % function not differentiable, so use equal effect from all x
+            % http://makeyourownneuralnetwork.blogspot.com/2016/05/complex-valued-neural-networks.html
+            dz=ones(size(x));
+        end
+        
+        % square
+        function [z,dz] = square(x)
+            z = x.*conj(x);
+            dz = 2 * conj(x);
+        end
+
+        % -----------------------------------------------------------------        
+        % -----------purely complex activation functions ------------------
+        
         
     end
     methods        
@@ -372,12 +373,6 @@ classdef complexcascadenet < handle
                     obj.trainInd = params.trainInd;
                     obj.valInd = params.valInd;
                     obj.testInd = params.testInd;            
-            end
-            
-            if isfield(params,'lrate')
-                obj.lrate= params.lrate; 
-            else
-                obj.lrate=obj.lrate_default;
             end
             
             if isfield(params,'mu')
@@ -426,7 +421,7 @@ classdef complexcascadenet < handle
             
             
             % type of training
-            if ~isfield(params,'initFcn'), params.initFcn='nguyen-widrow'; end
+            if ~isfield(params,'initFcn'), params.initFcn='rands'; end
             obj.initFcn = params.initFcn;
             if ~isfield(params,'trainFcn'), params.trainFcn='trainlm'; end
             obj.trainFcn = params.trainFcn;
@@ -1106,7 +1101,6 @@ classdef complexcascadenet < handle
        
             % update the weights over the epochs
             [Msetrain,Msetest,Msevalidate] = deal(-1*ones(1,obj.nbrofEpochs));
-            %lrate = obj.lrate;
             %disp('input learning rate is not being used, set in gradient directory');     
             [Gradient,Mu,Gamma,Ew,Ewi,Ewl,Ewb] = deal(nan(1,obj.nbrofEpochs));
             
@@ -1127,6 +1121,12 @@ classdef complexcascadenet < handle
             % Regularization parameters needed for trainlm and trainbr
             totalnbrofParameters = (2-isreal(bIWLW))*obj.nbrofParameters;
             obj.gamma = totalnbrofParameters;
+
+            
+            if obj.performancePlots
+                fighandle = figure('NumberTitle','off','Name','Complex CascadeNN Training (complexcascadenet.train)');
+            end
+            
             
             %--------------S T A R T    E P O C H    L O O P --------------
             %--------------------------------------------------------------
@@ -1134,6 +1134,7 @@ classdef complexcascadenet < handle
                 epoch=epoch+1;                
                 printthisepoch = ((epoch-1)/obj.printmseinEpochs == floor((epoch-1)/obj.printmseinEpochs));
                 plotthisepoch = ((epoch-1)/obj.plotmseinEpochs == floor((epoch-1)/obj.plotmseinEpochs));
+                
                 
                 % pick a batch for this epoch for training or keep it fixed
                 % throughout (@todo: could pull fixed out of the loop but
@@ -1462,12 +1463,15 @@ classdef complexcascadenet < handle
                         % fast update is rank one updates to base qr(Jac')
                         FAST_UPDATE = 0;
                         if USEQR && FAST_UPDATE,  R = qr(Jac'); end
+
                         
+                        % -------------------------------------------------
+                        % ------ mu optimization --------------------------                        
                         trn = out(:,batchtrain);
                         msetrn = inf; perftrn=inf; numstep = 1;
                         while (perftrn>perfcurr) && (obj.mu<obj.mu_max)                                                    
 
-                            if printthisepoch
+                            if 0
                                 % for debugging the LM optimization of loading
                                 fprintf('epoch %d numstep %d mu %0.5f+alpha %0.5f\n',...
                                     epoch,numstep,obj.mu,obj.alpha);
@@ -1541,6 +1545,10 @@ classdef complexcascadenet < handle
                                 obj.mu = max(obj.mu * obj.mu_dec,obj.mu_min);               
                             end
                         end
+                        % ------ mu optimization --------------------------
+                        % -------------------------------------------------                        
+                        
+
                         
                         % Regularization update for gamma, beta, alpha
                         switch obj.trainFcn
@@ -1676,7 +1684,7 @@ classdef complexcascadenet < handle
                 
                 
                 if plotthisepoch || (obj.performancePlots && keeptraining==0)
-                    figure(231); clf;
+                    figure(fighandle); clf;
                     ha(1) = subplot(411);
                     semilogy(Msetrain(1:epoch),'b.-','MarkerSize',20); hold on;
                     semilogy(Msetest(1:epoch),'r+-','MarkerSize',4);
