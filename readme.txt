@@ -3,22 +3,14 @@ Pleaes note the license and disclaimers in this README
 
 # Description
 
-This is a matlab class intended to replace feedforwardnet which takes only real inputs.
-When complex inputs are separated into [real; imag], the ability to do complex operations 
-typical of signal processing is made more difficult by introducing unnecessary degrees of 
-freedom.  complexcascade class directly implements complex neural networks with either complex
-activation functions (e.g. tanh) or split real/imag activation functions 
-i.e., f(z) =  f(real(z)) + 1i * f(imag(z)).
+This is a matlab class intended to replace feedforwardnet which takes only real inputs. When complex inputs are separated into [real; imag], the ability to do complex operations typical of signal processing is made more difficult by introducing unnecessary degrees of freedom. complexcascade class directly implements complex neural networks with either complex activation functions (e.g. tanh) or split real/imag activation functions i.e., f(z) = f(real(z)) + 1i * f(imag(z)).
 
-Most non-linear problems will get stuck in local minima when using gradient techniques, so 
-the preferred method is to use a blended Hessian/gradient approach (Levenberg Marquardt).
+Most non-linear problems will get stuck in local minima when using gradient techniques, so the preferred method is to use a blended Hessian/gradient approach (Levenberg Marquardt).
+Implementation of LM in this code follows the notation in the companion paper.
 
-Bayesian Regularization (MacKay) uses a mahalanobis distance metric that combines the network
-error with the netowrk weights norm, adapting the estimate of the variance of each at each 
-step.  The approach uses an estimate of the number of parameters in the network problem.
+Also implemented here is Bayesian Regularization. Bayesian Regularization (MacKay) uses a mahalanobis distance metric that combines the network error with the netowrk weights norm, adapting the estimate of the variance of each at each step. The approach uses an estimate of the number of parameters in the network problem.
 
-Cascade architecture adds connections from the input directly to deeper 
-layers and also connections skipping layers to benefit signal subtraction problems.
+Skip connections enable feed forwardnets to easily implement signal subtraction. They also help the issue of vanishing gradients when backpropagting errors from the metric.
 
 # Licenses
 see LICENSE file
