@@ -141,8 +141,7 @@ classdef complexcascadenet < handle
         maxtime = Inf;        % (s) let epochs determine stopping        
         
         msedesired = 0;
-        min_grad = 1e-7 / 10; % matlab sets to 1e-7, set lower due to complex
-                             % @todo: unclear where this number comes from       
+        min_grad = 1e-7 / 10; % matlab sets to 1e-7, set lower due to complex                                     
                              
         max_faildefault = 100;                   
     end        
@@ -218,15 +217,13 @@ classdef complexcascadenet < handle
             zi(indsi) = 0;
             z = zr + 1i * zi;
             
-            % assume that derivative is 1 when either is linear
-            % @todo: should this be treated as split re/im or not            
-            
             % treating as split re/im
+            % derivative is 1 in the >=0 region
             [dz.real,dz.imag] = deal(zeros(size(z)));
             dz.real(~indsr) = 1;
             dz.imag(~indsi) = 1;  
             
-            % note: treating as a complex function does not work!
+            % treating as a complex function (code is not setup for this)
             %dz = zeros(size(z));
             %dz(~indsr) = 1;            
             %dz(~indsi) = dz(~indsi) + 1i;            
@@ -429,6 +426,7 @@ classdef complexcascadenet < handle
             % map to [-1 1] if specifically requested
             % otherwise, no mapping if linear
             %@todo: this should be done based on ranges of the functions
+            %       as done by matlab
             if iscell(params.layersFcn)
                 lFcn = params.layersFcn{1};
             else
@@ -1070,7 +1068,11 @@ classdef complexcascadenet < handle
             fprintf('training %d parameters\n',obj.nbrofParameters);
             switch obj.trainFcn
                 case {'trainlm','trainbr'}
+                    % this is the size of the jacobian including all of the
+                    % parameters, and will be constructed form the Jac?
+                    % pieces                    
                     Jac = zeros(obj.nbrofParameters,nbrofSamplesinBatch*nbrofOutUnits);
+                                        
                     % Hessian and Jac*error are derived from Jac and don't
                     % need to be pre allocated
                     %Hessian = zeros(nbrofParameters,nbrofParameters);
