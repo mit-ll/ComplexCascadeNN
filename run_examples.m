@@ -38,26 +38,30 @@ x=randn(1,100)+1i*randn(1,100);
 % linear output
 y = x*(3+5*1i) + (4-2*1i);
 
+fprintf('\n\n\n---------------------------------------------------------\n');
+fprintf('Running simple linear example\n\n');
 % train and print out the weights and bias
 cnet = cnet.train(x,y);
-cnet.InputWeights
-cnet.LayerWeights
-cnet.bias
+fprintf('InputWeights: %s\n',num2str(cnet.InputWeights{1}));
+fprintf('LayerWeights: %s\n',num2str(cnet.LayerWeights{1}));
+fprintf('bias: %s\n',num2str(cnet.bias{1}));
 
-
-if havestatbox    
+if havestatbox
     % if you have the NN toolbox, this is matlab's real version of the same
     net = cascadeforwardnet(params.hiddenSize);
     net = train(net,realifyfn(x),realifyfn(y));
-    net.IW
-    net.LW
-    net.b
+    fprintf('InputWeights: %s\n',num2str(net.IW{1}(:)'));
+    fprintf('LayerWeights: %s\n',num2str(net.LW{1}(:)'));
+    fprintf('bias: %s\n',num2str(net.b{1}(:)'));
 end
-
-
+fprintf('\n---------------------------------------------------------\n\n\n');
 
 %% rotation example 
 % see Nitta's "An Extension of the Back-Propagation Algorithm to Complex Numbers"
+
+
+fprintf('\n\n\n---------------------------------------------------------\n');
+fprintf('Running rotation example\n\n');
 
 % ellipse
 % I
@@ -110,6 +114,9 @@ max_fail = nbrofEpochs;
 params.hiddenSize=hiddenSize;
 params.max_fail = max_fail;
 params.nbrofEpochs = nbrofEpochs;
+params.printmseinEpochs = 100;
+params.plotmseinEpochs = 100;
+params.performancePlots = 1;
 
 
 % best if no mapminmax since I is not symmetric
@@ -220,6 +227,7 @@ outO = cnet.test(shapeO);
 %--------------------------------------------------------------------------
 
 
+%{
 % for debugging, print out the gain settings for each network
 disp('complex net input gain');
 cnet.inputSettings.gain
@@ -231,18 +239,18 @@ if havestatbox
     disp('real net output gain');        
     net.outputs{end}.processSettings{1}.gain
 end
+%}
 
 % print out the mse for the outputs
-disp('mse for complex');
-norm( shapeOrotated - outO).^2
+fprintf('MSE for complexNN on shape test %0.3f\n',norm( shapeOrotated - outO).^2);
 if havestatbox    
-    disp('mse for real');
-    norm( shapeOrotated - outOr).^2
+    fprintf('MSE for realNN on shape test %0.3f\n',norm( shapeOrotated - outOr).^2);
 end
 
 % make plots
 legtxt = {};
-figure(123);clf;
+fighandle = figure('NumberTitle','off','Name','Shapes train and test');
+fighandle.Position = [563          45        1184         815];
 plot(shape,'.','MarkerSize',24); legtxt{end+1} = 'shape train';
 hold on;
 plot(shaperotated,'v','MarkerSize',12); legtxt{end+1} = 'shape train rotated';
@@ -258,10 +266,16 @@ if havestatbox
     plot(outOr,'ro','MarkerSize',12); legtxt{end+1} = sprintf('%s real net test output',num2str(hiddenSize_reim));
 end
 
-legend(legtxt,'Location','best','FontSize',18);
+legend(legtxt,'Location','bestoutside','FontSize',18);
 axis tight;
 xlim([-0.6 0.6]);
 ylim([-1 1]);
 grid minor; grid;
 xlabel('real','FontSize',24);
 ylabel('imaginary','FontSize',24);
+
+fprintf('\n---------------------------------------------------------\n\n\n');
+
+
+
+
