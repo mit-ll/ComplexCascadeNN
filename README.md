@@ -52,8 +52,11 @@ Delivered to the U.S. Government with Unlimited Rights, as defined in DFARS Part
 
 # Third-party software for gradient-descent
 
-Original code by J.R.Malik has been forked and modified for complex values from
-https://github.com/jrvmalik/gradient-descent/commit/49814482969cf7aab2554160f74f4112a51789f6
-
-MIT License for the code can be obtained from
-https://github.com/jrvmalik/gradient-descent/blob/master/LICENSE
+## Notices
+The gradient-descent directory contains new functionality built on top of 
+John Malik's original Copyright (c) 2019 project: 
+https://github.com/jrvmalik/gradient-descent. 
+Commit 49814482969cf7aab2554160f74f4112a51789f6 was the basis to which 
+these extensions have been applied. Our version of gradient-descent 
+replaces squares with magnitude squared to be able to optimize complex 
+networks.
