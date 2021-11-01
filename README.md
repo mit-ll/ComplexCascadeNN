@@ -50,10 +50,10 @@ The software/firmware is provided to you on an As-Is basis
 Delivered to the U.S. Government with Unlimited Rights, as defined in DFARS Part 252.227-7013 or 7014 (Feb 2014). Notwithstanding any copyright notice, U.S. Government rights in this work are defined by DFARS 252.227-7013 or DFARS 252.227-7014 as detailed above. Use of this work other than as specifically authorized by the U.S. Government may violate any copyrights that exist in this work.
 
 
-# Third-party software License for gradient-descent
+# Third-party software for gradient-descent
 
-Code can be obtained from
-https://github.com/jrvmalik/gradient-descent
+Original code by J.R.Malik has been forked and modified for complex values from
+https://github.com/jrvmalik/gradient-descent/commit/49814482969cf7aab2554160f74f4112a51789f6
 
-MIT License provided at
+MIT License for the code can be obtained from
 https://github.com/jrvmalik/gradient-descent/blob/master/LICENSE
