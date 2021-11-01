@@ -33,6 +33,8 @@ MIT Lincoln Laboratory
 Lexington, MA, USA
 swaroop@ll.mit.edu
 
+[![DOI](https://zenodo.org/badge/421960129.svg)](https://zenodo.org/badge/latestdoi/421960129)
+
 # Disclaimer
 DISTRIBUTION STATEMENT A. Approved for public release. Distribution is unlimited.
 
