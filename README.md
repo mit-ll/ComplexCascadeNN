@@ -33,7 +33,6 @@ MIT Lincoln Laboratory
 Lexington, MA, USA
 swaroop@ll.mit.edu
 
-
 # Disclaimer
 DISTRIBUTION STATEMENT A. Approved for public release. Distribution is unlimited.
 
@@ -41,7 +40,8 @@ This material is based upon work supported by the Defense Advanced Research Proj
 
 © 2021 Massachusetts Institute of Technology.
 
-Subject to FAR52.227-11 Patent Rights - Ownership by the contractor (May 2014)
+    Subject to FAR52.227-11 Patent Rights - Ownership by the contractor (May 2014)
+    SPDX-License-Identifier: BSD 3-Clause License
 
 The software/firmware is provided to you on an As-Is basis
 
