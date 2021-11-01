@@ -1,5 +1,5 @@
 # ComplexCascadeNN (complex split-activation skip-layers feedforward neural network)
-Pleaes note the license and disclaimers in this README
+Please note the license and disclaimers in this README
 
 # Description
 
