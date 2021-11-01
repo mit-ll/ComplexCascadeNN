@@ -2,5 +2,5 @@ SPDXVersion: SPDX-2.1
     PackageName: ComplexCascadeNN
     PackageHomePage: https://github.com/mit-ll/ComplexCascadeNN
     PackageOriginator: MIT Lincoln Laboratory
-    PackageCopyrightText: [Year] Massachusetts Institute of Technology <tvo@ll.mit.edu>
+    PackageCopyrightText: [2021] Massachusetts Institute of Technology <tvo@ll.mit.edu>
     PackageLicenseDeclared: SPDX License Id
