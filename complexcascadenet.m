@@ -820,8 +820,8 @@ classdef complexcascadenet < handle
                 %-----------------------------
                 % complex initializations
                 case 'crandn'
-                    w = 0.1*crandn( nbrofNeurons, nbrofIn );
-                    b = 0.1*crandn( nbrofNeurons, 1);
+                    w = 0.1*obj.crandn( nbrofNeurons, nbrofIn );
+                    b = 0.1*obj.crandn( nbrofNeurons, 1);
                 case 'crands'
                     w = rands( nbrofNeurons, nbrofIn ) + 1i*rands( nbrofNeurons, nbrofIn );      
                     b = rands( nbrofNeurons, 1) + 1i*rands( nbrofNeurons, 1);                 
